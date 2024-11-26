@@ -29,6 +29,7 @@ int main(int argc, char *argv[], char *env[])
 	int background;             /* equals 1 if a command is followed by '&' */
 	char *args[MAX_LINE/2];     /* command line (of 256) has max of 128 arguments */
 	// probably useful variables:
+	int group; //grupo para añadir procesos
 	int pid_fork, pid_wait; /* pid for created and waited process */
 	int status;             /* status returned by wait */
 	enum status status_res; /* status processed by analyze_status() */
@@ -36,6 +37,7 @@ int main(int argc, char *argv[], char *env[])
 
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
 	{   		
+		ignore_terminal_signals();
 		printf("COMMAND->");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
@@ -54,12 +56,49 @@ int main(int argc, char *argv[], char *env[])
 			case -1: perror("fork");
 					 continue;
 			case 0: /*Child*/
-				execve(args[0], args, env);
+				if (!background){
+					group = pid_fork = getpid();
+					setpgid(pid_fork, group);
+					tcsetpgrp(STDIN_FILENO, group);
+				}
+				restore_terminal_signals();
+				execvp(args[0], args);
 				perror(args[0]);
 				exit(EXIT_FAILURE);	
 				break;
 			default:
-				pid_wait = waitpid(pid_fork, &status, 0);
+				if (!background){
+					group = pid_fork;
+					setpgid(pid_fork, group);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
+					tcsetpgrp(STDIN_FILENO, group);
+					pid_wait = waitpid(pid_fork, &status, WUNTRACED);
+					tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
+					if (WIFEXITED(status)){
+						/*teminó con exit()*/
+						/*WEXITSTATUS(status)*/
+						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WEXITSTATUS(status));
+					}else if(WIFSIGNALED(status)){
+						/*terminó por una señal*/
+						/*WTERMSIG(status)*/
+						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WTERMSIG(status));
+					}else if (WCOREDUMP(status)){
+						
+					}else if(WIFSTOPPED(status)){
+						/*stopped*/
+						/*WSTOPSIG(status)*/
+
+					}else if (WIFCONTINUED(status)){
+						/*never reached*/
+
+					}else{
+						/*pid_wait == -1*/
+					}
+					
+					
+				}else{
+					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+				}
+				
 				break;
 
 
