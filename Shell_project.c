@@ -18,6 +18,42 @@ To compile and run the program:
 #include <string.h>
 
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
+// -----------------------------------------------------------------------
+//                            Manejador de childs          
+// -----------------------------------------------------------------------
+
+void child_handler (int s)
+{
+	int pid_wait;
+	int status;
+	pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED );
+	if (pid_wait == 0) {
+		printf("manejador SIGCHLD, ningún cambio en los procesos");
+		return; /*no hay cambio del proceso que envia la señal*/
+	}
+	if (pid_wait == -1) return; /*error*/
+	if (WIFEXITED(status)){
+						/*teminó con exit()*/
+						/*WEXITSTATUS(status)*/
+		printf("\n Background pid: %d,Finished, info: %d\n", pid_wait,  WEXITSTATUS(status));
+	}else if(WIFSIGNALED(status)){
+		/*terminó por una señal*/
+		/*WTERMSIG(status)*/
+		printf("\n Signaled child pid: %d,  %d\n", pid_wait, WTERMSIG(status));
+	}else if (WCOREDUMP(status)){
+						
+	}else if(WIFSTOPPED(status)){
+		/*stopped*/
+		/*WSTOPSIG(status)*/
+		printf("\nStopped pid: %d, %d\n", pid_wait, WSTOPSIG(status));
+	}else if (WIFCONTINUED(status)){
+		/**/
+		printf("Continued %d\n", pid_wait);
+	}else{
+		/*pid_wait == -1*/
+	}
+
+}
 
 // -----------------------------------------------------------------------
 //                            MAIN          
@@ -38,6 +74,7 @@ int main(int argc, char *argv[], char *env[])
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
 	{   		
 		ignore_terminal_signals();
+		signal(SIGCHLD, child_handler);
 		printf("COMMAND->");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
@@ -76,7 +113,7 @@ int main(int argc, char *argv[], char *env[])
 					if (WIFEXITED(status)){
 						/*teminó con exit()*/
 						/*WEXITSTATUS(status)*/
-						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WEXITSTATUS(status));
+						printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], WEXITSTATUS(status));
 					}else if(WIFSIGNALED(status)){
 						/*terminó por una señal*/
 						/*WTERMSIG(status)*/
@@ -86,7 +123,7 @@ int main(int argc, char *argv[], char *env[])
 					}else if(WIFSTOPPED(status)){
 						/*stopped*/
 						/*WSTOPSIG(status)*/
-
+						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WSTOPSIG(status));
 					}else if (WIFCONTINUED(status)){
 						/*never reached*/
 
@@ -96,6 +133,7 @@ int main(int argc, char *argv[], char *env[])
 					
 					
 				}else{
+
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
 				}
 				
