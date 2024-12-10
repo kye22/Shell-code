@@ -102,16 +102,28 @@ int main(int argc, char *argv[], char *env[])
 		if (strcmp(args[0], "hola")==0){
 			printf("que tal?\n");
 			continue;
-		} else if (strcmp(args[0], "quit") == 0){
+		} 
+		if (strcmp(args[0], "quit") == 0){
 			break;
-		}else if (strcmp(args[0], "maskCHLD") == 0){
+		}
+		if (strcmp(args[0], "maskCHLD") == 0){
 			block_SIGCHLD();
 			continue;
-		}else if (strcmp(args[0], "unmaskCHLD") == 0){
+		}
+		if (strcmp(args[0], "unmaskCHLD") == 0){
 			unblock_SIGCHLD();
 			continue;
-		} else if (strcmp(args[0], "jobs")==0){
+		} 
+		if (strcmp(args[0], "jobs")==0){
 			print_job_list(job_list); /*mostramos tareas*/
+			continue;
+		}
+		if (strcmp(args[0], "cd") == 0){
+			chdir(args[1]);
+			if (chdir(args[1]) == -1){
+				fprintf(stderr,"cd: %s:", args[1]);
+				perror("");
+			};
 			continue;
 		}
 
@@ -126,8 +138,8 @@ int main(int argc, char *argv[], char *env[])
 					group = pid_fork = getpid();
 					setpgid(pid_fork, group);
 					tcsetpgrp(STDIN_FILENO, group);
+					restore_terminal_signals();
 				}
-				restore_terminal_signals();
 				execvp(args[0], args);
 				fprintf(stderr, "Error, command not found: %s\n", args[0]);
 				exit(EXIT_FAILURE);	
@@ -139,7 +151,7 @@ int main(int argc, char *argv[], char *env[])
 					tcsetpgrp(STDIN_FILENO, group); //cedemos terminal
 					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
 					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
-					analyze_status(status, &info);
+					status_res = analyze_status(status, &info);
 					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
 				}else{
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
