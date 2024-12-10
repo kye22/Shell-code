@@ -34,7 +34,6 @@ void child_handler (int s)
 		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | 8 ); // WCONTINUED se define como 8 en waitflags.h, por algún motivo a mi no me funciona
 
 		if (pid_wait == 0) {
-			printf("manejador SIGCHLD, ningún cambio en los procesos");
 			return; /*no hay cambio del proceso que envia la señal*/
 		}
 		if (pid_wait == -1) {
@@ -87,6 +86,7 @@ int main(int argc, char *argv[], char *env[])
 	int info;				/* info processed by analyze_status() */
 	sigset_t mySet;
 	job *njob;        /* Creamos variable job para el siguiente*/
+	job_list = new_list("Job List");
 
 
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
