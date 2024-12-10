@@ -16,8 +16,10 @@ To compile and run the program:
 
 #include "job_control.h"   // remember to compile with module job_control.c 
 #include <string.h>
-newlist(background);
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
+
+
+job * job_list; //Lista de tareas de procesos, para tener información de procesos en background
 // -----------------------------------------------------------------------
 //                            Manejador de childs          
 // -----------------------------------------------------------------------
@@ -26,32 +28,44 @@ void child_handler (int s)
 {
 	int pid_wait;
 	int status;
+	int info;
+	enum status status_res; //enum status define valores de posibles estaods de procesos tras waitpid
 	while (1){
-		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | __W_CONTINUED );
+		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | 8 ); // WCONTINUED se define como 8 en waitflags.h, por algún motivo a mi no me funciona
+
 		if (pid_wait == 0) {
 			printf("manejador SIGCHLD, ningún cambio en los procesos");
 			return; /*no hay cambio del proceso que envia la señal*/
 		}
-		if (pid_wait == -1) return; /*error*/
-		if (WIFEXITED(status)){
-							/*teminó con exit()*/
-							/*WEXITSTATUS(status)*/
-			printf("\n Background pid: %d,Finished, info: %d\n", pid_wait,  WEXITSTATUS(status));
-		}else if(WIFSIGNALED(status)){
-			/*terminó por una señal*/
-			/*WTERMSIG(status)*/
-			printf("\n Signaled child pid: %d,  %d\n", pid_wait, WTERMSIG(status));
-		}else if (WCOREDUMP(status)){
-							
-		}else if(WIFSTOPPED(status)){
-			/*stopped*/
-			/*WSTOPSIG(status)*/
-			printf("\nStopped pid: %d, %d\n", pid_wait, WSTOPSIG(status));
-		}else if (WIFCONTINUED(status)){
-			/**/
-			printf("Continued %d\n", pid_wait);
-		}else{
-			/*pid_wait == -1*/
+		if (pid_wait == -1) {
+			return; /*error*/
+		}
+		//analizamos estado del proceso
+		status_res = analyze_status(status, &info);
+
+		//buscamos el proceso en la lista, por su PID
+		job *current_job = get_item_bypid(job_list, pid_wait);
+
+		if (current_job != NULL){
+			switch (status_res){
+				case EXITED:
+					/*teminó con exit()*/
+					printf("\n Background pid: %d, command : %s, Exited, info: %d\n", pid_wait, current_job->command, info); 
+					delete_job(job_list, current_job);
+					break;
+				case SIGNALED:
+					printf("\n Background pid: %d, command : %s, Signaled, info: %d\n", pid_wait, current_job->command, info); 
+					delete_job(job_list, current_job);
+					break;
+				case SUSPENDED:
+					printf("\n Background pid: %d, command : %s, Suspended, info: %d\n", pid_wait, current_job->command, info); 
+					current_job->state = STOPPED;
+					break;
+				case CONTINUED:
+					printf("\n Background pid: %d, command : %s, Continued\n", pid_wait, current_job->command); 
+					current_job->state = BACKGROUND;
+					break;
+			}
 		}
 	}
 }
@@ -72,6 +86,9 @@ int main(int argc, char *argv[], char *env[])
 	enum status status_res; /* status processed by analyze_status() */
 	int info;				/* info processed by analyze_status() */
 	sigset_t mySet;
+	job *njob;        /* Creamos variable job para el siguiente*/
+
+
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
 	{   		
 		ignore_terminal_signals();
@@ -93,14 +110,17 @@ int main(int argc, char *argv[], char *env[])
 		}else if (strcmp(args[0], "unmaskCHLD") == 0){
 			unblock_SIGCHLD();
 			continue;
+		} else if (strcmp(args[0], "jobs")==0){
+			print_job_list(job_list); /*mostramos tareas*/
+			continue;
 		}
 
-		printf("Argumento 0 : %s\n", args[0]);
 
 		pid_fork = fork();
 		switch(pid_fork){
-			case -1: perror("fork");
-					 continue;
+			case -1: 
+				perror("fork");
+				continue;
 			case 0: /*Child*/
 				if (!background){
 					group = pid_fork = getpid();
@@ -109,40 +129,22 @@ int main(int argc, char *argv[], char *env[])
 				}
 				restore_terminal_signals();
 				execvp(args[0], args);
-				perror(args[0]);
+				fprintf(stderr, "Error, command not found: %s\n", args[0]);
 				exit(EXIT_FAILURE);	
 				break;
 			default:
 				if (!background){
 					group = pid_fork;
 					setpgid(pid_fork, group);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
-					tcsetpgrp(STDIN_FILENO, group);
-					pid_wait = waitpid(pid_fork, &status, WUNTRACED);
-					tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
-					if (WIFEXITED(status)){
-						/*teminó con exit()*/
-						/*WEXITSTATUS(status)*/
-						printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], WEXITSTATUS(status));
-					}else if(WIFSIGNALED(status)){
-						/*terminó por una señal*/
-						/*WTERMSIG(status)*/
-						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WTERMSIG(status));
-					}else if (WCOREDUMP(status)){
-						
-					}else if(WIFSTOPPED(status)){
-						/*stopped*/
-						/*WSTOPSIG(status)*/
-						printf("\nForeground pid: %d, command: %s, %d\n", pid_fork, args[0], WSTOPSIG(status));
-					}else if (WIFCONTINUED(status)){
-						/*never reached*/
-
-					}else{
-						/*pid_wait == -1*/
-					}
-					
-					
+					tcsetpgrp(STDIN_FILENO, group); //cedemos terminal
+					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
+					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
+					analyze_status(status, &info);
+					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
 				}else{
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+					njob = new_job(pid_fork, args[0], BACKGROUND);
+					add_job(job_list, njob);
 
 				}
 				
