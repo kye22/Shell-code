@@ -26,7 +26,7 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 
 void child_handler (int s)
 {
-	
+	block_SIGCHLD();
 	int pid_wait;
 	int status;
 	int info;
@@ -69,7 +69,7 @@ void child_handler (int s)
 			}
 		}
 	}
-	
+	unblock_SIGCHLD();
 }
 
 // -----------------------------------------------------------------------
@@ -181,19 +181,19 @@ int main(int argc, char *argv[], char *env[])
 							printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
 							break;
 						case SUSPENDED:
-							
+							block_SIGCHLD();
 							printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
 							njob = new_job(pid_fork, args[0], STOPPED);
 							add_job(job_list, njob);
-							
+							unblock_SIGCHLD();
 							break;
 					}
 				}else{
-					
+					block_SIGCHLD();
 					njob = new_job(pid_fork, args[0], BACKGROUND);
 					add_job(job_list, njob);
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
-					
+					unblock_SIGCHLD();
 				}
 				
 				break;
