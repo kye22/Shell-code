@@ -159,6 +159,7 @@ int main(int argc, char *argv[], char *env[])
 			njob->state = FOREGROUND;
 			/* le damos la terminal y hacemos waitpid*/
 			printf("pid: %d, command: %s is now in foreground\n", njob->pgid, njob->command);
+			args[0] = njob->command;
 			tcsetpgrp(STDIN_FILENO, njob->pgid);
 			/*esperamos y obtenemos información*/
 			waitpid(njob->pgid, &status, WUNTRACED);
