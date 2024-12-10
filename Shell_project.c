@@ -24,7 +24,7 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 //                            Manejador de childs          
 // -----------------------------------------------------------------------
 
-void child_handler (int s)
+void child_handler (int señal)
 {
 	block_SIGCHLD();
 	int pid_wait;
@@ -142,6 +142,45 @@ int main(int argc, char *argv[], char *env[])
 				printf("Background job resumed: pid : %d, command: %s\n", njob->pgid, njob->command);
 			}else{
 				printf("bg: %d: Dicha tarea no está suspendida\n", atoi(args[1]));
+			}
+			continue;
+		}
+		if (strcmp(args[0], "fg") == 0){
+			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone fg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
+			njob = get_item_bypos(job_list, idx);
+			if (njob == NULL){
+				printf("fg: No se ha encontrado dicha tarea\n");
+				continue;
+			}
+			if (njob->state == STOPPED){
+				killpg(njob->pgid, SIGCONT); //si está detenida, la continuamos
+			}
+			njob->state = FOREGROUND;
+			/* le damos la terminal y hacemos waitpid*/
+			tcsetpgrp(STDIN_FILENO, njob->pgid);
+			/*esperamos y obtenemos información*/
+			waitpid(njob->pgid, &status, WUNTRACED);
+			status_res = analyze_status(status, &info);
+			/*recuperamos terminal*/
+			tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
+			/*analizamos*/
+			switch (status_res){
+				case EXITED:
+					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
+					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
+					}
+					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
+					break;
+				case SIGNALED:
+					printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
+					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
+					break;
+				case SUSPENDED:
+					block_SIGCHLD();
+					printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
+					njob->state = STOPPED; /* Si se para cambiamos su estado*/
+					unblock_SIGCHLD();
+					break;
 			}
 			continue;
 		}
