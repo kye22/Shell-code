@@ -146,6 +146,7 @@ int main(int argc, char *argv[], char *env[])
 			continue;
 		}
 		if (strcmp(args[0], "fg") == 0){
+			block_SIGCHLD();
 			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone fg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
 			njob = get_item_bypos(job_list, idx);
 			if (njob == NULL){
@@ -157,6 +158,7 @@ int main(int argc, char *argv[], char *env[])
 			}
 			njob->state = FOREGROUND;
 			/* le damos la terminal y hacemos waitpid*/
+			printf("pid: %d, command: %s is now in foreground\n", njob->pgid, njob->command);
 			tcsetpgrp(STDIN_FILENO, njob->pgid);
 			/*esperamos y obtenemos información*/
 			waitpid(njob->pgid, &status, WUNTRACED);
@@ -182,6 +184,7 @@ int main(int argc, char *argv[], char *env[])
 					unblock_SIGCHLD();
 					break;
 			}
+			unblock_SIGCHLD();
 			continue;
 		}
 
