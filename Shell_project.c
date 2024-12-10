@@ -26,7 +26,7 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 
 void child_handler (int s)
 {
-	block_SIGCHLD();
+	
 	int pid_wait;
 	int status;
 	int info;
@@ -69,7 +69,7 @@ void child_handler (int s)
 			}
 		}
 	}
-	unblock_SIGCHLD();
+	
 }
 
 // -----------------------------------------------------------------------
@@ -128,6 +128,22 @@ int main(int argc, char *argv[], char *env[])
 				perror("");
 			};
 			continue;
+		} 
+		if (strcmp(args[0], "bg") == 0){
+			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone bg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
+			njob = get_item_bypos(job_list, idx);
+			if (njob == NULL){
+				printf("bg: No se ha encontrado dicha tarea\n");
+				continue;
+			}
+			if (njob->state == STOPPED){
+				njob->state = BACKGROUND;
+				killpg(njob->pgid, SIGCONT);
+				printf("Background job resumed: pid : %d, command: %s\n", njob->pgid, njob->command);
+			}else{
+				printf("bg: %d: Dicha tarea no está suspendida\n", atoi(args[1]));
+			}
+			continue;
 		}
 
 
@@ -165,19 +181,19 @@ int main(int argc, char *argv[], char *env[])
 							printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
 							break;
 						case SUSPENDED:
-							block_SIGCHLD();
+							
 							printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
 							njob = new_job(pid_fork, args[0], STOPPED);
 							add_job(job_list, njob);
-							unblock_SIGCHLD();
+							
 							break;
 					}
 				}else{
-					block_SIGCHLD();
+					
 					njob = new_job(pid_fork, args[0], BACKGROUND);
 					add_job(job_list, njob);
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
-					unblock_SIGCHLD();
+					
 				}
 				
 				break;
