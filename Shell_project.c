@@ -152,7 +152,21 @@ int main(int argc, char *argv[], char *env[])
 					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
 					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
 					status_res = analyze_status(status, &info);
-					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
+					switch (status_res){
+						case EXITED:
+							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
+							printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
+							}
+							break;
+						case SIGNALED:
+							printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
+							break;
+						case SUSPENDED:
+							printf("\nForeground pid: %d, command: %s, Suspended, Switched to background, info: %d\n", pid_fork, args[0], info);
+							njob = new_job(pid_fork, args[0], STOPPED);
+							add_job(job_list, njob);
+							break;
+					}
 				}else{
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
 					njob = new_job(pid_fork, args[0], BACKGROUND);
