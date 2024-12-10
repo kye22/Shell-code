@@ -26,9 +26,11 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 
 void child_handler (int s)
 {
+	block_SIGCHLD();
 	int pid_wait;
 	int status;
 	int info;
+	job *current_job;
 	enum status status_res; //enum status define valores de posibles estaods de procesos tras waitpid
 	while (1){
 		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | 8 ); // WCONTINUED se define como 8 en waitflags.h, por algún motivo a mi no me funciona
@@ -43,7 +45,7 @@ void child_handler (int s)
 		status_res = analyze_status(status, &info);
 
 		//buscamos el proceso en la lista, por su PID
-		job *current_job = get_item_bypid(job_list, pid_wait);
+		current_job= get_item_bypid(job_list, pid_wait);
 
 		if (current_job != NULL){
 			switch (status_res){
@@ -67,6 +69,7 @@ void child_handler (int s)
 			}
 		}
 	}
+	unblock_SIGCHLD();
 }
 
 // -----------------------------------------------------------------------
@@ -162,16 +165,19 @@ int main(int argc, char *argv[], char *env[])
 							printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
 							break;
 						case SUSPENDED:
-							printf("\nForeground pid: %d, command: %s, Suspended, Switched to background, info: %d\n", pid_fork, args[0], info);
+							block_SIGCHLD();
+							printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
 							njob = new_job(pid_fork, args[0], STOPPED);
 							add_job(job_list, njob);
+							unblock_SIGCHLD();
 							break;
 					}
 				}else{
-					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+					block_SIGCHLD();
 					njob = new_job(pid_fork, args[0], BACKGROUND);
 					add_job(job_list, njob);
-
+					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+					unblock_SIGCHLD();
 				}
 				
 				break;
