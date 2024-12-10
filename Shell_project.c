@@ -36,9 +36,11 @@ void child_handler (int señal)
 		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | 8 ); // WCONTINUED se define como 8 en waitflags.h, por algún motivo a mi no me funciona
 
 		if (pid_wait == 0) {
+			unblock_SIGCHLD();
 			return; /*no hay cambio del proceso que envia la señal*/
 		}
 		if (pid_wait == -1) {
+			unblock_SIGCHLD();
 			return; /*error*/
 		}
 		//analizamos estado del proceso
@@ -87,6 +89,7 @@ int main(int argc, char *argv[], char *env[])
 	int status;             /* status returned by wait */
 	enum status status_res; /* status processed by analyze_status() */
 	int info;				/* info processed by analyze_status() */
+	int cedido = 0;         /* informa si un proceso viene cedido mediante fg*/
 	sigset_t mySet;
 	job *njob;        /* Creamos variable job para el siguiente*/
 	job_list = new_list("Job List");
@@ -155,11 +158,12 @@ int main(int argc, char *argv[], char *env[])
 			}
 			if (njob->state == STOPPED){
 				killpg(njob->pgid, SIGCONT); //si está detenida, la continuamos
+				printf("fg: continuando tarea parada\n");
 			}
 			njob->state = FOREGROUND;
 			/* le damos la terminal y hacemos waitpid*/
 			printf("pid: %d, command: %s is now in foreground\n", njob->pgid, njob->command);
-			args[0] = njob->command;
+			pid_fork = njob->pgid;
 			tcsetpgrp(STDIN_FILENO, njob->pgid);
 			/*esperamos y obtenemos información*/
 			waitpid(njob->pgid, &status, WUNTRACED);
@@ -170,22 +174,21 @@ int main(int argc, char *argv[], char *env[])
 			switch (status_res){
 				case EXITED:
 					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
+					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, njob->command, info);
 					}
 					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
 					break;
 				case SIGNALED:
-					printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
+					printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, njob->command, info);
 					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
 					break;
 				case SUSPENDED:
 					block_SIGCHLD();
-					printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
+					printf("\nForeground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, njob->command, info);
 					njob->state = STOPPED; /* Si se para cambiamos su estado*/
 					unblock_SIGCHLD();
 					break;
-			}
-			unblock_SIGCHLD();
+			}unblock_SIGCHLD();
 			continue;
 		}
 
@@ -196,21 +199,19 @@ int main(int argc, char *argv[], char *env[])
 				perror("fork");
 				continue;
 			case 0: /*Child*/
+				new_process_group(getpid());
 				if (!background){
-					group = pid_fork = getpid();
-					setpgid(pid_fork, group);
-					tcsetpgrp(STDIN_FILENO, group);
-					restore_terminal_signals();
+					tcsetpgrp(STDIN_FILENO, getpid());
 				}
+				restore_terminal_signals();
 				execvp(args[0], args);
 				fprintf(stderr, "Error, command not found: %s\n", args[0]);
 				exit(EXIT_FAILURE);	
 				break;
 			default:
 				if (!background){
-					group = pid_fork;
-					setpgid(pid_fork, group);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
-					tcsetpgrp(STDIN_FILENO, group); //cedemos terminal
+					new_process_group(pid_fork);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
+					tcsetpgrp(STDIN_FILENO, pid_fork); //cedemos terminal
 					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
 					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
 					status_res = analyze_status(status, &info);
