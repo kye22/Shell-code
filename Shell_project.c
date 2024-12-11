@@ -1,297 +1,316 @@
-/**
-UNIX Shell Project
-
-Sistemas Operativos
-Grados I. Informatica, Computadores & Software
-Dept. Arquitectura de Computadores - UMA
-
-Some code adapted from "Fundamentos de Sistemas Operativos", Silberschatz et al.
-
-To compile and run the program:
-   $ gcc Shell_project.c job_control.c -o Shell
-   $ ./Shell          
-	(then type ^D to exit program)
-
-**/
-
-#include "job_control.h"   // remember to compile with module job_control.c 
-#include <string.h>
-#include "parse_redir.h"
+#include <string.h>   
+#include <errno.h>    
 #include <fcntl.h>
+#include "job_control.h" // remember to compile with module job_control.c
+#include "parse_redir.h" 
+
+// Añadimos colores para tarea adicional
+#define ROJO "\x1b[31;1;1m"
+#define NEGRO "\x1b[0m"
+#define VERDE "\x1b[32;1;1m"
+#define AZUL "\x1b[34;1;1m"
+#define CIAN "\x1b[36;1;1m"
+#define MARRON "\x1b[33;1;1m"
+#define PURPURA "\x1b[35;1;1m"
+#define RESET "\033[0m"
+
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
 
+// Lista de tareas de procesos, para tener informacion de procesos en background
+job *job_list;
 
-job * job_list; //Lista de tareas de procesos, para tener información de procesos en background
-// -----------------------------------------------------------------------
-//                            Manejador de childs          
-// -----------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+//                            Manejador de childs
+//-----------------------------------------------------------------------------
+void sigchld_handler(int s) {
+    int status;              
+    pid_t pid;               
+    int info;                
+    enum status status_res;  // enum status define valores posibles estados de procesos tras waitpid()
 
-void child_handler (int s)
-{
-	block_SIGCHLD();
-	int pid_wait;
-	int status;
-	int info;
-	job *current_job;
-	enum status status_res; //enum status define valores de posibles estaods de procesos tras waitpid
-	while (1){
-		pid_wait = waitpid(-1, &status, WNOHANG | WUNTRACED | 8 ); // WCONTINUED se define como 8 en waitflags.h, por algún motivo a mi no me funciona
+    // Recorremos todos los procesos hijos que han cambiado de estado
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | 8)) > 0) { //El 8  sustituye a WCONTINUED (definido supuestamente en waitflags.h pero no se porque no me va)
+        // Analizar el estado del proceso hijo
+        status_res = analyze_status(status, &info);
 
-		if (pid_wait == 0) {
-			unblock_SIGCHLD();
-			return; /*no hay cambio del proceso que envia la señal*/
-		}
-		if (pid_wait == -1) {
-			unblock_SIGCHLD();
-			return; /*error*/
-		}
-		//analizamos estado del proceso
-		status_res = analyze_status(status, &info);
+        // Usamos la funion getitembypid para rescatar el trabajo y cambiar su estatus o eliminaro
+        job *current_job = get_item_bypid(job_list, pid);
 
-		//buscamos el proceso en la lista, por su PID
-		current_job= get_item_bypid(job_list, pid_wait);
+        if (current_job) {
+            printf(AZUL "\nBackground process %d finished: %s\n" RESET, pid, status_strings[status_res]);
+            fflush(stdout);
 
-		if (current_job != NULL){
-			printf("Background pid: %d, command : %s, %s, info: %d\n", pid_wait, current_job->command, status_strings[status_res], info); 
-			switch (status_res){
-				case SUSPENDED:
-					current_job->state = STOPPED;
-					break;
-				case CONTINUED:
-					current_job->state = BACKGROUND;
-					break;
-				default: //Exit o Signaled.
-					delete_job(job_list, current_job);
-					break;
+            switch (status_res) {
+                case SUSPENDED:
+                /* Si está suspendido, cambiamos su estado a stopped*/
+                    current_job->state = STOPPED;
+                    break;
 
-			}
-		}
-	}
-	unblock_SIGCHLD();
+                case CONTINUED:
+                /* Si ha continuado, cambiamos su estado a background*/
+                    current_job->state = BACKGROUND;
+                    break;
+
+                default:
+                /* Si ha terminado, eliminamos la tera de la lista*/
+                    delete_job(job_list, current_job);
+                    break;
+            }
+        }
+    }
 }
 
-// -----------------------------------------------------------------------
-//                            MAIN          
-// -----------------------------------------------------------------------
-
-int main(int argc, char *argv[], char *env[])
+int main(void)
 {
-	char inputBuffer[MAX_LINE]; /* buffer to hold the command entered */
-	int background;             /* equals 1 if a command is followed by '&' */
-	char *args[MAX_LINE/2];     /* command line (of 256) has max of 128 arguments */
-	// probably useful variables:
-	int group; //grupo para añadir procesos
-	int pid_fork, pid_wait; /* pid for created and waited process */
-	int status;             /* status returned by wait */
-	enum status status_res; /* status processed by analyze_status() */
-	int info;				/* info processed by analyze_status() */
-	sigset_t mySet;
-	job *tarea;        /* Creamos variable job para el siguiente*/
-	job_list = new_list("Job List");
-	int salida, entrada;
-	
+    char inputBuffer[MAX_LINE]; /* Bbuffer to hold the command entered*/
+    int background;             /* equals 1 if a command is followed by '&' */
+    char *args[MAX_LINE / 2];   /* command line (of 256) has max of 128 arguments */
 
-	ignore_terminal_signals();
+    // probably useful variables
+    int pid_fork, pid_wait; /* pid for created and waited process */
+    int status;             /* status returned by wait */
+    enum status status_res; /* status procesed by analyze_status() */
+    int info;               /* info processed by analyze_status() */
 
-	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
-	{   		
-		signal(SIGCHLD, child_handler);
-		printf("COMMAND-> ");
-		fflush(stdout);
-		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
-		
-		
-		char *file_in;
-		char *file_out;
-		parse_redirections(args, &file_in, &file_out);
-
-		/*Reiniciamos entrada y salida a default*/
-
-		if(args[0]==NULL) continue;   // if empty command
-		/*Comprobamos si hay redirecciones*/
-
-		if (strcmp(args[0], "hola")==0){
-			printf("que tal?\n");
-			continue;
-		} 
-		if (strcmp(args[0], "quit") == 0){
-			break;
-		}
-		if (strcmp(args[0], "maskCHLD") == 0){
-			block_SIGCHLD();
-			continue;
-		}
-		if (strcmp(args[0], "unmaskCHLD") == 0){
-			unblock_SIGCHLD();
-			continue;
-		} 
-		if (strcmp(args[0], "jobs")==0){
-			job * aux = job_list;
-			if (aux->next == NULL){
-				printf("No hay tareas en segundo plano\n");
-			} else print_job_list(job_list); /*mostramos tareas*/
-			continue;
-		}
-		if (strcmp(args[0], "cd") == 0){
-			if (args[1] == NULL) continue;
-			if (chdir(args[1]) == -1){
-				fprintf(stderr,"cd: %s:", args[1]);
-				perror("");
-			};
-			continue;
-		} 
-		if (strcmp(args[0], "bg") == 0){
-			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone bg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
-			if (idx <= 0){
-				continue;
-			}
-			tarea = get_item_bypos(job_list, idx);
-			if (tarea == NULL){
-				printf("bg: No se ha encontrado dicha tarea\n");
-				continue;
-			}
-			if (tarea->state == STOPPED){
-				tarea->state = BACKGROUND;
-				killpg(tarea->pgid, SIGCONT);
-				printf("Background job resumed: pid : %d, command: %s\n", tarea->pgid, tarea->command);
-			}else{
-				printf("bg: %d: Dicha tarea no está suspendida\n", atoi(args[1]));
-			}
-			continue;
-		}
-		if (strcmp(args[0], "fg") == 0){
-			block_SIGCHLD();
-			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone fg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
-			tarea = get_item_bypos(job_list, idx);
-			if (idx <= 0) continue;
-			if (tarea == NULL){
-				printf("fg: No se ha encontrado dicha tarea\n");
-				continue;
-			}
-			if (tarea->state == STOPPED){
-				killpg(tarea->pgid, SIGCONT); //si está detenida, la continuamos
-				printf("fg: continuando tarea parada\n");
-			}
-			tarea->state = FOREGROUND;
-			/* le damos la terminal y hacemos waitpid*/
-			printf("pid: %d, command: %s is now in foreground\n", tarea->pgid, tarea->command);
-			pid_fork = tarea->pgid;
-			tcsetpgrp(STDIN_FILENO, tarea->pgid);
-			/*esperamos y obtenemos información*/
-			pid_wait = waitpid(tarea->pgid, &status, WUNTRACED);
-			if (pid_wait == -1){
-				printf("Error waiting for child in fg function\n");
-				tcsetpgrp(STDIN_FILENO, getpgid(getpid())); /* Recuperamos terminal y vamos a la siguiente iteración del bucle.  */
-				continue;
-			}
-			status_res = analyze_status(status, &info);
-			/*recuperamos terminal*/
-			tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
-			/*analizamos*/
-			switch (status_res){
-				case SUSPENDED:
-					block_SIGCHLD();
-					printf("Foreground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, tarea->command, info);
-					tarea->state = STOPPED; /* Si se para cambiamos su estado*/
-					unblock_SIGCHLD();
-					break;
-				default: //Exit o Signaled.
-					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-						printf("Foreground pid: %d, command: %s, %s, info: %d\n", pid_fork, tarea->command, status_strings[status_res], info);
-					}
-					delete_job(job_list, tarea); /* Si termina lo eliminamos del job list*/
-					break;
-			}unblock_SIGCHLD();
-			continue;
-		}
+    job *tarea; /* Creamos variable job para manejar tareas creadas.*/
+    job_list = new_list("Job List");
 
 
-		pid_fork = fork();
-		switch(pid_fork){
-			case -1: 
-				perror("fork");
-				continue;
-			case 0: /*Child*/
-				new_process_group(getpid());
-				if (file_in != NULL){
-					int fichero_in = open(file_in, O_RDONLY);
-					if (fichero_in < 0){
-						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
-						perror("");
-						exit(-1);
-					}
-					if (dup2(fichero_in, STDIN_FILENO) < 0){
-						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
-						perror("");
-						close(fichero_in);
-						exit(-1);
-					}
-					close(fichero_in);
-				}
-				if (file_out != NULL){
-					int fichero_out = open(file_out, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-					if (fichero_out < 0){
-						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_out);
-						perror("");
-						exit(-1);
-					}
-					if (dup2(fichero_out, STDOUT_FILENO) < 0){
-						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_out);
-						perror("");
-						close(fichero_out);
-						exit(-1);
-					}
-					close(fichero_out);
-				}
-				if (!background){
-					tcsetpgrp(STDIN_FILENO, getpid());
-				}
-				restore_terminal_signals();
-				execvp(args[0], args);
-				fprintf(stderr, "Error, command not found: %s\n", args[0]);
-				exit(EXIT_FAILURE);	
-				break;
-			default:
-				if (!background){
-					new_process_group(pid_fork);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
-					tcsetpgrp(STDIN_FILENO, pid_fork); //cedemos terminal
-					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
-					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
-					status_res = analyze_status(status, &info);
-					switch (status_res){
-						case SUSPENDED:
-							block_SIGCHLD();
-							fprintf(stderr, "Foreground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
-							tarea = new_job(pid_fork, args[0], STOPPED);
-							add_job(job_list, tarea);
-							unblock_SIGCHLD();
-							break;
-						default: //Case Signaled o Exited
-							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-								fprintf(stderr, "Foreground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
-							}
-							break;
-					}
-				}else{
-					block_SIGCHLD();
-					tarea = new_job(pid_fork, args[0], BACKGROUND);
-					add_job(job_list, tarea);
-					fprintf(stderr, "Background job running... pid: %d , command: %s\n", pid_fork, args[0]);
-					unblock_SIGCHLD();
-				}
-				
-				break;
+    signal(SIGCHLD, sigchld_handler);
 
 
-		}
-		/* the steps are:
-			 (1) fork a child process using fork()
-			 (2) the child process will invoke execvp()
-			 (3) if background == 0, the parent will wait, otherwise continue 
-			 (4) Shell shows a status message for processed command 
-			 (5) loop returns to get_commnad() function
-		*/
-		//Antes del fin del while, devolvemos los descriptores originales
+    ignore_terminal_signals(); /*Macro para ignorar todas las señales menos ctrl + D durante la ejecución del shell*/
 
-	} // end while
+    printf(VERDE "Shell de Cayetano López Moreno:\n" RESET);
+
+    while (1) {  /* Bucle principal del shell */
+        printf(CIAN "COMMAND->" RESET);
+        fflush(stdout); 
+        get_command(inputBuffer, MAX_LINE, args, &background); /*get next command*/
+
+        if (args[0] == NULL) continue; /* Ignorar comandos vacíos */
+
+        // Obtenemos , si hay, ficheros entrada y o salida
+        char *fich_entrada, *fich_salida;
+        parse_redirections(args, &fich_entrada, &fich_salida);
+
+        /* =========================    COMANDOS INTERNOS    ========================= */
+
+        // Comando interno: (cd)
+        if (strcmp(args[0], "cd") == 0) {
+            if (args[1] == NULL) {
+                chdir(getenv("HOME")); 
+            } else {
+                if (chdir(args[1]) == -1) { 
+                    printf(ROJO "Error: Directorio no encontrado\n" RESET);
+                }
+            }
+            continue; // Volver al inicio del bucle principal
+        }
+
+        // Comando interno:mostar los jobs
+        if (strcmp(args[0], "jobs") == 0) {
+            block_SIGCHLD(); // Bloqueamos las señales SIGCHLD para evitar condiciones de carrera
+            if (empty_list(job_list)) { // Si la lista esta vacia, imprimimos que no hay tareas
+                printf(ROJO "No hay tareas en background o suspendidas\n" RESET);
+            } else {
+                print_job_list(job_list); 
+            }
+            unblock_SIGCHLD(); 
+            continue; 
+        }
+
+        // Comando interno: poner en primer plano un trabajo (fg)
+        if (strcmp(args[0], "fg") == 0) {
+            int n = 1; 
+            // Comprobamos si se ha pasado un argumento para seleccionar la posición
+            // del trabajo en la lista. Si no, usamos n=1 (el primer trabajo).
+            if (args[1] != NULL) {
+                n = atoi(args[1]);
+                if (n <= 0) {
+                    printf(ROJO "fg: Argumento inválido\n" RESET);
+                    continue; // Argumento inválido, volver al bucle principal
+                }
+            }
+
+            // Bloqueamos SIGCHLD antes de acceder a la lista
+            block_SIGCHLD();
+            // Obtenemos el trabajo por su posición en la lista
+            job * fg_job = get_item_bypos(job_list, n);
+            if (fg_job == NULL) {
+                printf(ROJO "fg: no existe un trabajo en esa posición\n" RESET);
+                // Desbloqueamos SIGCHLD si no encontramos el trabajo
+                unblock_SIGCHLD();
+                continue; // Volver al bucle principal
+            }
+
+            // Cambiamos el estado del trabajo a FOREGROUND
+            fg_job->state = FOREGROUND;
+            // Ya no necesitamos acceso exclusivo a la lista
+            unblock_SIGCHLD();
+
+            // Cedemos el terminal al grupo de procesos del trabajo
+            tcsetpgrp(STDIN_FILENO, fg_job->pgid);
+            // Enviamos señal SIGCONT por si el trabajo estaba detenido
+            killpg(fg_job->pgid, SIGCONT);
+
+            int status;
+            int info;
+            enum status status_res;
+
+            // Esperamos al proceso en primer plano (puede finalizar o suspenderse)
+            pid_t pid_wait = waitpid(fg_job->pgid, &status, WUNTRACED);
+            // Analizamos el estado en que terminó o cambió el proceso
+            status_res = analyze_status(status, &info);
+
+            switch (status_res) {
+                case SUSPENDED:
+                    block_SIGCHLD();
+                    fg_job->state = STOPPED;
+                    unblock_SIGCHLD();
+                    printf(VERDE "Proceso %d suspendido de nuevo.\n" RESET, fg_job->pgid);
+                    break;
+
+                case EXITED:
+                case SIGNALED:
+                    block_SIGCHLD();
+                    printf(VERDE "Foreground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET, 
+                        pid_wait, fg_job->command, status_strings[status_res], info);
+                    delete_job(job_list, fg_job);
+                    unblock_SIGCHLD();
+                    break;
+
+                default:
+                    break;
+            }
+
+            // Devolvemos el terminal al shell
+            tcsetpgrp(STDIN_FILENO, getpid());
+
+            continue; // Volver al inicio del bucle principal
+        }
+
+        // Comando interno: poner en segundo plano un trabajo suspendido (bg)
+        if (strcmp(args[0], "bg") == 0) {
+            int n = 1; 
+            // Si el usuario especifica un número, lo convertimos a entero.
+            // Si no se especifica, n=1 se aplicará al primer trabajo de la lista.
+            if (args[1] != NULL) {
+                n = atoi(args[1]);
+                if (n <= 0) {
+                    printf(ROJO "bg: Argumento inválido\n" RESET);
+                    continue; // Argumento inválido, volvemos al bucle principal.
+                }
+            }
+
+            // Bloqueamos SIGCHLD antes de acceder a la lista de trabajos.
+            block_SIGCHLD();
+            job *bg_job = get_item_bypos(job_list, n);
+            if (bg_job == NULL) {
+                // Si no encontramos un trabajo en esa posición, informamos y continuamos.
+                printf(ROJO "bg: no existe un trabajo en esa posición\n" RESET);
+                unblock_SIGCHLD();
+                continue;
+            }
+
+            // Verificamos que el trabajo esté suspendido (STOPPED).
+            if (bg_job->state != STOPPED) {
+                // Si no está suspendido, no podemos ponerlo en bg.
+                printf(ROJO "bg: el trabajo seleccionado no está suspendido\n" RESET);
+                unblock_SIGCHLD();
+                continue;
+            }
+
+            // Cambiamos el estado a BACKGROUND
+            bg_job->state = BACKGROUND;
+            // Ya no necesitamos acceso exclusivo a la lista
+            unblock_SIGCHLD();
+
+            // Enviamos SIGCONT al grupo de procesos del trabajo para reanudarlo en segundo plano.
+            killpg(bg_job->pgid, SIGCONT);
+
+            // Indicamos al usuario que el trabajo se ha reanudado en segundo plano.
+            printf(VERDE "Tarea %d reanudada en segundo plano: PID: %d, Command: %s\n" RESET, 
+                   n, bg_job->pgid, bg_job->command);
+
+            continue; // Volver al inicio del bucle principal
+        }
+
+        /* =========================    EJECUCIÓN DE PROCESOS    ========================= */
+
+        pid_fork = fork();
+
+        switch (pid_fork) {
+            case -1:
+                perror(ROJO "Error: fork() failed\n" RESET);
+                exit(-1);
+
+            case 0: /* Proceso hijo */
+                restore_terminal_signals();
+                new_process_group(getpid());
+
+                // Redirección de entrada
+                if (fich_entrada != NULL) {
+                    int fd_in = open(fich_entrada, O_RDONLY);
+                    if (fd_in < 0) {
+                        perror(ROJO "Error abriendo fichero de entrada" RESET);
+                        exit(1);
+                    }
+                    dup2(fd_in, STDIN_FILENO);
+                    close(fd_in);
+                }
+
+                // Redirección de salida
+                if (fich_salida != NULL) {
+                    int fd_out = open(fich_salida, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                    if (fd_out < 0) {
+                        perror(ROJO "Error abriendo fichero de salida" RESET);
+                        exit(1);
+                    }
+                    dup2(fd_out, STDOUT_FILENO);
+                    close(fd_out);
+                }
+
+                execvp(args[0], args);
+                perror(ROJO "Error: execvp falló" RESET);
+                exit(EXIT_FAILURE);
+
+            default: /* Proceso padre */
+                if (background == 0) {
+                    tcsetpgrp(STDIN_FILENO, pid_fork);
+                    pid_wait = waitpid(pid_fork, &status, WUNTRACED);
+                    tcsetpgrp(STDIN_FILENO, getpid());
+
+                    status_res = analyze_status(status, &info);
+
+                    switch (status_res) {
+                        case SUSPENDED:
+                            block_SIGCHLD();
+                            tarea = new_job(pid_fork, args[0], STOPPED);
+                            add_job(job_list, tarea);
+                            unblock_SIGCHLD();
+                            break;
+
+                        case EXITED:
+                        case SIGNALED:
+                            printf(VERDE "Foreground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET,
+                                   pid_wait, args[0], status_strings[status_res], info);
+                            break;
+
+                        default:
+                            break;
+                    }
+
+                } else {
+                    block_SIGCHLD();
+                    tarea = new_job(pid_fork, args[0], BACKGROUND);
+                    add_job(job_list, tarea);
+                    unblock_SIGCHLD();
+                    printf(VERDE "Background process running -> PID: %d, Command: %s\n" RESET,
+                           pid_fork, args[0]);
+                }
+
+                break;
+        }
+    }
 }
