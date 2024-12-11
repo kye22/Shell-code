@@ -15,6 +15,7 @@ To compile and run the program:
 **/
 
 #include "job_control.h"   // remember to compile with module job_control.c 
+#include "parse_redir.h"
 #include <string.h>
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
 
@@ -50,24 +51,18 @@ void child_handler (int señal)
 		current_job= get_item_bypid(job_list, pid_wait);
 
 		if (current_job != NULL){
+			printf("\n Background pid: %d, command : %s, %s, info: %d\n", pid_wait, current_job->command, status_strings[status_res], info); 
 			switch (status_res){
-				case EXITED:
-					/*teminó con exit()*/
-					printf("\n Background pid: %d, command : %s, Exited, info: %d\n", pid_wait, current_job->command, info); 
-					delete_job(job_list, current_job);
-					break;
-				case SIGNALED:
-					printf("\n Background pid: %d, command : %s, Signaled, info: %d\n", pid_wait, current_job->command, info); 
-					delete_job(job_list, current_job);
-					break;
 				case SUSPENDED:
-					printf("\n Background pid: %d, command : %s, Suspended, info: %d\n", pid_wait, current_job->command, info); 
 					current_job->state = STOPPED;
 					break;
 				case CONTINUED:
-					printf("\n Background pid: %d, command : %s, Continued\n", pid_wait, current_job->command); 
 					current_job->state = BACKGROUND;
 					break;
+				default: //Exit o Signaled.
+					delete_job(job_list, current_job);
+					break;
+
 			}
 		}
 	}
@@ -101,8 +96,8 @@ int main(int argc, char *argv[], char *env[])
 		printf("COMMAND-> ");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
-		//get_input(args);
-		//get_output(args);
+		char *file_in, *file_out;
+		parse_redirections(args, &file_in, &file_out);
 		if(args[0]==NULL) continue;   // if empty command
 
 		if (strcmp(args[0], "hola")==0){
