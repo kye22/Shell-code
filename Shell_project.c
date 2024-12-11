@@ -89,20 +89,20 @@ int main(int argc, char *argv[], char *env[])
 	int status;             /* status returned by wait */
 	enum status status_res; /* status processed by analyze_status() */
 	int info;				/* info processed by analyze_status() */
-	int cedido = 0;         /* informa si un proceso viene cedido mediante fg*/
 	sigset_t mySet;
-	job *njob;        /* Creamos variable job para el siguiente*/
+	job *tarea;        /* Creamos variable job para el siguiente*/
 	job_list = new_list("Job List");
-
+	
+	ignore_terminal_signals();
 
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
 	{   		
-		ignore_terminal_signals();
 		signal(SIGCHLD, child_handler);
 		printf("COMMAND-> ");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
-		
+		//get_input(args);
+		//get_output(args);
 		if(args[0]==NULL) continue;   // if empty command
 
 		if (strcmp(args[0], "hola")==0){
@@ -121,7 +121,10 @@ int main(int argc, char *argv[], char *env[])
 			continue;
 		} 
 		if (strcmp(args[0], "jobs")==0){
-			print_job_list(job_list); /*mostramos tareas*/
+			job * aux = job_list;
+			if (aux->next == NULL){
+				printf("No hay tareas en segundo plano\n");
+			} else print_job_list(job_list); /*mostramos tareas*/
 			continue;
 		}
 		if (strcmp(args[0], "cd") == 0){
@@ -134,15 +137,15 @@ int main(int argc, char *argv[], char *env[])
 		} 
 		if (strcmp(args[0], "bg") == 0){
 			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone bg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
-			njob = get_item_bypos(job_list, idx);
-			if (njob == NULL){
+			tarea = get_item_bypos(job_list, idx);
+			if (tarea == NULL){
 				printf("bg: No se ha encontrado dicha tarea\n");
 				continue;
 			}
-			if (njob->state == STOPPED){
-				njob->state = BACKGROUND;
-				killpg(njob->pgid, SIGCONT);
-				printf("Background job resumed: pid : %d, command: %s\n", njob->pgid, njob->command);
+			if (tarea->state == STOPPED){
+				tarea->state = BACKGROUND;
+				killpg(tarea->pgid, SIGCONT);
+				printf("Background job resumed: pid : %d, command: %s\n", tarea->pgid, tarea->command);
 			}else{
 				printf("bg: %d: Dicha tarea no está suspendida\n", atoi(args[1]));
 			}
@@ -151,42 +154,43 @@ int main(int argc, char *argv[], char *env[])
 		if (strcmp(args[0], "fg") == 0){
 			block_SIGCHLD();
 			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone fg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
-			njob = get_item_bypos(job_list, idx);
-			if (njob == NULL){
+			tarea = get_item_bypos(job_list, idx);
+			if (tarea == NULL){
 				printf("fg: No se ha encontrado dicha tarea\n");
 				continue;
 			}
-			if (njob->state == STOPPED){
-				killpg(njob->pgid, SIGCONT); //si está detenida, la continuamos
+			if (tarea->state == STOPPED){
+				killpg(tarea->pgid, SIGCONT); //si está detenida, la continuamos
 				printf("fg: continuando tarea parada\n");
 			}
-			njob->state = FOREGROUND;
+			tarea->state = FOREGROUND;
 			/* le damos la terminal y hacemos waitpid*/
-			printf("pid: %d, command: %s is now in foreground\n", njob->pgid, njob->command);
-			pid_fork = njob->pgid;
-			tcsetpgrp(STDIN_FILENO, njob->pgid);
+			printf("pid: %d, command: %s is now in foreground\n", tarea->pgid, tarea->command);
+			pid_fork = tarea->pgid;
+			tcsetpgrp(STDIN_FILENO, tarea->pgid);
 			/*esperamos y obtenemos información*/
-			waitpid(njob->pgid, &status, WUNTRACED);
+			pid_wait = waitpid(tarea->pgid, &status, WUNTRACED);
+			if (pid_wait == -1){
+				printf("Error waiting for child in fg function\n");
+				tcsetpgrp(STDIN_FILENO, getpgid(getpid())); /* Recuperamos terminal y vamos a la siguiente iteración del bucle.  */
+				continue;
+			}
 			status_res = analyze_status(status, &info);
 			/*recuperamos terminal*/
 			tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
 			/*analizamos*/
 			switch (status_res){
-				case EXITED:
-					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-					printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, njob->command, info);
-					}
-					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
-					break;
-				case SIGNALED:
-					printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, njob->command, info);
-					delete_job(job_list, njob); /* Si termina lo eliminamos del job list*/
-					break;
 				case SUSPENDED:
 					block_SIGCHLD();
-					printf("\nForeground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, njob->command, info);
-					njob->state = STOPPED; /* Si se para cambiamos su estado*/
+					printf("\nForeground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, tarea->command, info);
+					tarea->state = STOPPED; /* Si se para cambiamos su estado*/
 					unblock_SIGCHLD();
+					break;
+				default: //Exit o Signaled.
+					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
+						printf("\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, tarea->command, status_strings[status_res], info);
+					}
+					delete_job(job_list, tarea); /* Si termina lo eliminamos del job list*/
 					break;
 			}unblock_SIGCHLD();
 			continue;
@@ -216,26 +220,23 @@ int main(int argc, char *argv[], char *env[])
 					tcsetpgrp(STDIN_FILENO, getpgid(getpid())); //recuperamos terminal
 					status_res = analyze_status(status, &info);
 					switch (status_res){
-						case EXITED:
-							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-							printf("\nForeground pid: %d, command: %s, Finished, info: %d\n", pid_fork, args[0], info);
-							}
-							break;
-						case SIGNALED:
-							printf("\nForeground pid: %d, command: %s, Signaled, info: %d\n", pid_fork, args[0], info);
-							break;
 						case SUSPENDED:
 							block_SIGCHLD();
 							printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
-							njob = new_job(pid_fork, args[0], STOPPED);
-							add_job(job_list, njob);
+							tarea = new_job(pid_fork, args[0], STOPPED);
+							add_job(job_list, tarea);
 							unblock_SIGCHLD();
+							break;
+						default: //Case Signaled o Exited
+							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
+								printf("\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
+							}
 							break;
 					}
 				}else{
 					block_SIGCHLD();
-					njob = new_job(pid_fork, args[0], BACKGROUND);
-					add_job(job_list, njob);
+					tarea = new_job(pid_fork, args[0], BACKGROUND);
+					add_job(job_list, tarea);
 					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
 					unblock_SIGCHLD();
 				}
