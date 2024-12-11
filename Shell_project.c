@@ -25,7 +25,7 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 //                            Manejador de childs          
 // -----------------------------------------------------------------------
 
-void child_handler (int señal)
+void child_handler (int s)
 {
 	block_SIGCHLD();
 	int pid_wait;
@@ -51,7 +51,7 @@ void child_handler (int señal)
 		current_job= get_item_bypid(job_list, pid_wait);
 
 		if (current_job != NULL){
-			printf("\n Background pid: %d, command : %s, %s, info: %d\n", pid_wait, current_job->command, status_strings[status_res], info); 
+			printf("Background pid: %d, command : %s, %s, info: %d\n", pid_wait, current_job->command, status_strings[status_res], info); 
 			switch (status_res){
 				case SUSPENDED:
 					current_job->state = STOPPED;
@@ -154,7 +154,7 @@ int main(int argc, char *argv[], char *env[])
 			continue;
 		}
 		if (strcmp(args[0], "cd") == 0){
-			chdir(args[1]);
+			if (args[1] == NULL) continue;
 			if (chdir(args[1]) == -1){
 				fprintf(stderr,"cd: %s:", args[1]);
 				perror("");
@@ -208,13 +208,13 @@ int main(int argc, char *argv[], char *env[])
 			switch (status_res){
 				case SUSPENDED:
 					block_SIGCHLD();
-					printf("\nForeground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, tarea->command, info);
+					printf("Foreground pid: %d, command: %s, Suspended in FG, info: %d\n", pid_fork, tarea->command, info);
 					tarea->state = STOPPED; /* Si se para cambiamos su estado*/
 					unblock_SIGCHLD();
 					break;
 				default: //Exit o Signaled.
 					if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-						printf("\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, tarea->command, status_strings[status_res], info);
+						printf("Foreground pid: %d, command: %s, %s, info: %d\n", pid_fork, tarea->command, status_strings[status_res], info);
 					}
 					delete_job(job_list, tarea); /* Si termina lo eliminamos del job list*/
 					break;
@@ -248,14 +248,14 @@ int main(int argc, char *argv[], char *env[])
 					switch (status_res){
 						case SUSPENDED:
 							block_SIGCHLD();
-							fprintf(stderr, "\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
+							fprintf(stderr, "Foreground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
 							tarea = new_job(pid_fork, args[0], STOPPED);
 							add_job(job_list, tarea);
 							unblock_SIGCHLD();
 							break;
 						default: //Case Signaled o Exited
 							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-								fprintf(stderr, "\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
+								fprintf(stderr, "Foreground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
 							}
 							break;
 					}
@@ -263,7 +263,7 @@ int main(int argc, char *argv[], char *env[])
 					block_SIGCHLD();
 					tarea = new_job(pid_fork, args[0], BACKGROUND);
 					add_job(job_list, tarea);
-					fprintf(stderr, "\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+					fprintf(stderr, "Background job running... pid: %d , command: %s\n", pid_fork, args[0]);
 					unblock_SIGCHLD();
 				}
 				
