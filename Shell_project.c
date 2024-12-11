@@ -25,7 +25,7 @@ job * job_list; //Lista de tareas de procesos, para tener información de proces
 //                            Manejador de childs          
 // -----------------------------------------------------------------------
 
-void child_handler (int señal)
+void child_handler (int s)
 {
 	block_SIGCHLD();
 	int pid_wait;
@@ -60,7 +60,13 @@ void child_handler (int señal)
 					current_job->state = BACKGROUND;
 					break;
 				default: //Exit o Signaled.
-					delete_job(job_list, current_job);
+					if(current_job->state == RESPAWNEABLE){
+						fprintf(stderr, "Respawneando proceso pid: %d, command: %s\n", current_job->pgid, current_job->command);
+						killpg(current_job->pgid, SIGCONT);
+						current_job->pgid = pid_wait;
+
+					}
+					else delete_job(job_list, current_job);
 					break;
 
 			}
@@ -88,6 +94,8 @@ int main(int argc, char *argv[], char *env[])
 	job *tarea;        /* Creamos variable job para el siguiente*/
 	job_list = new_list("Job List");
 	int salida, entrada;
+	int respawn;
+
 	
 
 	ignore_terminal_signals();
@@ -98,8 +106,7 @@ int main(int argc, char *argv[], char *env[])
 		printf("COMMAND-> ");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
-		
-		
+
 		char *file_in;
 		char *file_out;
 		parse_redirections(args, &file_in, &file_out);
@@ -130,6 +137,9 @@ int main(int argc, char *argv[], char *env[])
 			dup2(fileno(fichero_out), STDOUT_FILENO);
 			fclose(fichero_out);
 		}
+
+
+
 
 		if (strcmp(args[0], "hola")==0){
 			printf("que tal?\n");
@@ -239,7 +249,7 @@ int main(int argc, char *argv[], char *env[])
 				exit(EXIT_FAILURE);	
 				break;
 			default:
-				if (!background){
+				if (!background || !respawn){
 					new_process_group(pid_fork);//Cambia PID a un nuevo grupo. Como cambiamos al child, para ponerlo al grupo del padre
 					tcsetpgrp(STDIN_FILENO, pid_fork); //cedemos terminal
 					pid_wait = waitpid(pid_fork, &status, WUNTRACED); //esperamos su finalización
@@ -254,14 +264,14 @@ int main(int argc, char *argv[], char *env[])
 							unblock_SIGCHLD();
 							break;
 						default: //Case Signaled o Exited
-							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
+							if (info != 1){ //Si termina error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
 								fprintf(stderr, "\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
 							}
 							break;
 					}
 				}else{
 					block_SIGCHLD();
-					tarea = new_job(pid_fork, args[0], BACKGROUND);
+					new_job(pid_fork, args[0], respawn ? RESPAWNEABLE : BACKGROUND);
 					add_job(job_list, tarea);
 					fprintf(stderr, "\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
 					unblock_SIGCHLD();
