@@ -15,8 +15,8 @@ To compile and run the program:
 **/
 
 #include "job_control.h"   // remember to compile with module job_control.c 
-#include "parse_redir.h"
 #include <string.h>
+#include "parse_redir.h"
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
 
 
@@ -87,7 +87,9 @@ int main(int argc, char *argv[], char *env[])
 	sigset_t mySet;
 	job *tarea;        /* Creamos variable job para el siguiente*/
 	job_list = new_list("Job List");
+	int salida, entrada;
 	
+
 	ignore_terminal_signals();
 
 	while (1)   /* Program terminates normally inside get_command() after ^D is typed*/
@@ -96,9 +98,38 @@ int main(int argc, char *argv[], char *env[])
 		printf("COMMAND-> ");
 		fflush(stdout);
 		get_command(inputBuffer, MAX_LINE, args, &background);  /* get next command */
-		char *file_in, *file_out;
+		
+		
+		char *file_in;
+		char *file_out;
 		parse_redirections(args, &file_in, &file_out);
+
+		/*Reiniciamos entrada y salida a default*/
+		salida = dup(STDIN_FILENO);
+		entrada = dup(STDOUT_FILENO);
+
 		if(args[0]==NULL) continue;   // if empty command
+		/*Comprobamos si hay redirecciones*/
+		if (file_in != NULL){
+			FILE* fichero_in = fopen(file_in, "r");
+			if (fichero_in == NULL){
+				fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
+				perror("");
+				continue;
+			}
+			dup2(fileno(fichero_in), STDIN_FILENO);
+			fclose(fichero_in);
+		}
+		if (file_out != NULL){
+			FILE* fichero_out = fopen(file_out, "w");
+			if (fichero_out == NULL){
+				fprintf(stderr,"Error abriendo el archivo de salida: %s: ", file_out);
+				perror("");
+				continue;
+			}
+			dup2(fileno(fichero_out), STDOUT_FILENO);
+			fclose(fichero_out);
+		}
 
 		if (strcmp(args[0], "hola")==0){
 			printf("que tal?\n");
@@ -217,14 +248,14 @@ int main(int argc, char *argv[], char *env[])
 					switch (status_res){
 						case SUSPENDED:
 							block_SIGCHLD();
-							printf("\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
+							fprintf(stderr, "\nForeground pid: %d, command: %s, Suspended, info: %d\n", pid_fork, args[0], info);
 							tarea = new_job(pid_fork, args[0], STOPPED);
 							add_job(job_list, tarea);
 							unblock_SIGCHLD();
 							break;
 						default: //Case Signaled o Exited
 							if (info != 1){ //Si termina sin error (EXIT_FAILURE es 1, por lo tanto en caso contrario ha terminado correctamente). SI hay error ya se ha tratado en el hijo
-								printf("\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
+								fprintf(stderr, "\nForeground pid: %d, command: %s, %s, info: %d\n", pid_fork, args[0], status_strings[status_res], info);
 							}
 							break;
 					}
@@ -232,7 +263,7 @@ int main(int argc, char *argv[], char *env[])
 					block_SIGCHLD();
 					tarea = new_job(pid_fork, args[0], BACKGROUND);
 					add_job(job_list, tarea);
-					printf("\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
+					fprintf(stderr, "\nBackground job running... pid: %d , command: %s\n", pid_fork, args[0]);
 					unblock_SIGCHLD();
 				}
 				
@@ -247,6 +278,11 @@ int main(int argc, char *argv[], char *env[])
 			 (4) Shell shows a status message for processed command 
 			 (5) loop returns to get_commnad() function
 		*/
+		//Antes del fin del while, devolvemos los descriptores originales
 
+		dup2(salida, STDOUT_FILENO);
+		dup2(entrada, STDIN_FILENO);
+		close(salida);
+		close(entrada);
 	} // end while
 }
