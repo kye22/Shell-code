@@ -17,6 +17,7 @@ To compile and run the program:
 #include "job_control.h"   // remember to compile with module job_control.c 
 #include <string.h>
 #include "parse_redir.h"
+#include <fcntl.h>
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
 
 
@@ -105,31 +106,9 @@ int main(int argc, char *argv[], char *env[])
 		parse_redirections(args, &file_in, &file_out);
 
 		/*Reiniciamos entrada y salida a default*/
-		salida = dup(STDIN_FILENO);
-		entrada = dup(STDOUT_FILENO);
 
 		if(args[0]==NULL) continue;   // if empty command
 		/*Comprobamos si hay redirecciones*/
-		if (file_in != NULL){
-			FILE* fichero_in = fopen(file_in, "r");
-			if (fichero_in == NULL){
-				fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
-				perror("");
-				continue;
-			}
-			dup2(fileno(fichero_in), STDIN_FILENO);
-			fclose(fichero_in);
-		}
-		if (file_out != NULL){
-			FILE* fichero_out = fopen(file_out, "w");
-			if (fichero_out == NULL){
-				fprintf(stderr,"Error abriendo el archivo de salida: %s: ", file_out);
-				perror("");
-				continue;
-			}
-			dup2(fileno(fichero_out), STDOUT_FILENO);
-			fclose(fichero_out);
-		}
 
 		if (strcmp(args[0], "hola")==0){
 			printf("que tal?\n");
@@ -163,6 +142,9 @@ int main(int argc, char *argv[], char *env[])
 		} 
 		if (strcmp(args[0], "bg") == 0){
 			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone bg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
+			if (idx <= 0){
+				continue;
+			}
 			tarea = get_item_bypos(job_list, idx);
 			if (tarea == NULL){
 				printf("bg: No se ha encontrado dicha tarea\n");
@@ -181,6 +163,7 @@ int main(int argc, char *argv[], char *env[])
 			block_SIGCHLD();
 			int idx = (args[1] == NULL) ? 1: atoi(args[1]); //si solo pone fg, se interpreta como 1, si no, como el número añadido utilizando ascii to integer
 			tarea = get_item_bypos(job_list, idx);
+			if (idx <= 0) continue;
 			if (tarea == NULL){
 				printf("fg: No se ha encontrado dicha tarea\n");
 				continue;
@@ -230,6 +213,36 @@ int main(int argc, char *argv[], char *env[])
 				continue;
 			case 0: /*Child*/
 				new_process_group(getpid());
+				if (file_in != NULL){
+					int fichero_in = open(file_in, O_RDONLY);
+					if (fichero_in < 0){
+						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
+						perror("");
+						exit(-1);
+					}
+					if (dup2(fichero_in, STDIN_FILENO) < 0){
+						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_in);
+						perror("");
+						close(fichero_in);
+						exit(-1);
+					}
+					close(fichero_in);
+				}
+				if (file_out != NULL){
+					int fichero_out = open(file_out, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+					if (fichero_out < 0){
+						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_out);
+						perror("");
+						exit(-1);
+					}
+					if (dup2(fichero_out, STDOUT_FILENO) < 0){
+						fprintf(stderr,"Error abriendo el archivo de entrada: %s: ", file_out);
+						perror("");
+						close(fichero_out);
+						exit(-1);
+					}
+					close(fichero_out);
+				}
 				if (!background){
 					tcsetpgrp(STDIN_FILENO, getpid());
 				}
@@ -280,9 +293,5 @@ int main(int argc, char *argv[], char *env[])
 		*/
 		//Antes del fin del while, devolvemos los descriptores originales
 
-		dup2(salida, STDOUT_FILENO);
-		dup2(entrada, STDIN_FILENO);
-		close(salida);
-		close(entrada);
 	} // end while
 }
