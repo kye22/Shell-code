@@ -5,14 +5,15 @@
 #include "parse_redir.h" 
 
 // Añadimos colores para tarea adicional
+#define RESET "\x1b[0m"
 #define ROJO "\x1b[31;1;1m"
-#define NEGRO "\x1b[0m"
 #define VERDE "\x1b[32;1;1m"
+#define AMARILLO "\x1b[33;1;1m"
 #define AZUL "\x1b[34;1;1m"
-#define CIAN "\x1b[36;1;1m"
-#define MARRON "\x1b[33;1;1m"
 #define PURPURA "\x1b[35;1;1m"
-#define RESET "\033[0m"
+#define CIAN "\x1b[36;1;1m"
+#define BLANCO "\x1b[37;1;1m"
+#define DEFAULT "\x1b[39;1;1m"
 
 #define MAX_LINE 256 /* 256 chars per line, per command, should be enough. */
 
@@ -22,7 +23,7 @@ job *job_list;
 //-----------------------------------------------------------------------------
 //                            Manejador de childs
 //-----------------------------------------------------------------------------
-void sigchld_handler(int s) {
+void child_handler(int s) {
     int status;              
     pid_t pid;               
     int info;                
@@ -37,7 +38,7 @@ void sigchld_handler(int s) {
         job *current_job = get_item_bypid(job_list, pid);
 
         if (current_job) {
-            printf(AZUL "\nBackground process %d finished: %s\n" RESET, pid, status_strings[status_res]);
+            printf(PURPURA "Background process %d: %s\n" RESET, pid, status_strings[status_res]);
             fflush(stdout);
 
             switch (status_res) {
@@ -76,25 +77,25 @@ int main(void)
     job_list = new_list("Job List");
 
 
-    signal(SIGCHLD, sigchld_handler);
+    signal(SIGCHLD, child_handler);
 
 
     ignore_terminal_signals(); /*Macro para ignorar todas las señales menos ctrl + D durante la ejecución del shell*/
 
-    printf(VERDE "Shell de Cayetano López Moreno:\n" RESET);
+    printf(AZUL "Shell de Cayetano López Moreno:\n" RESET);
 
     while (1) {  /* Bucle principal del shell */
-        printf(CIAN "COMMAND->" RESET);
+        printf(VERDE "COMMAND->" RESET);
         fflush(stdout); 
         get_command(inputBuffer, MAX_LINE, args, &background); /*get next command*/
 
         if (args[0] == NULL) continue; /* Ignorar comandos vacíos */
 
-        // Obtenemos , si hay, ficheros entrada y o salida
+        // Obtenemos , si hay, ficheros  de entrada y/o salida
         char *fich_entrada, *fich_salida;
-        parse_redirections(args, &fich_entrada, &fich_salida);
+        parse_redirections(args, &fich_entrada, &fich_salida); /*funcion de parse_redir.h*/
 
-        /* =========================    COMANDOS INTERNOS    ========================= */
+        /* _______________________    COMANDOS INTERNOS     _______________________*/
 
         // Comando interno: (cd)
         if (strcmp(args[0], "cd") == 0) {
@@ -108,10 +109,10 @@ int main(void)
             continue; // Volver al inicio del bucle principal
         }
 
-        // Comando interno:mostar los jobs
+        // Comando interno: mostar los jobs
         if (strcmp(args[0], "jobs") == 0) {
-            block_SIGCHLD(); // Bloqueamos las señales SIGCHLD para evitar condiciones de carrera
-            if (empty_list(job_list)) { // Si la lista esta vacia, imprimimos que no hay tareas
+            block_SIGCHLD(); // Bloqueamos las señales SIGCHLD para evitar race conditions
+            if (empty_list(job_list)) { 
                 printf(ROJO "No hay tareas en background o suspendidas\n" RESET);
             } else {
                 print_job_list(job_list); 
@@ -122,22 +123,10 @@ int main(void)
 
         // Comando interno: poner en primer plano un trabajo (fg)
         if (strcmp(args[0], "fg") == 0) {
-            int n = 1; 
-            // Comprobamos si se ha pasado un argumento para seleccionar la posición
-            // del trabajo en la lista. Si no, usamos n=1 (el primer trabajo).
-            if (args[1] != NULL) {
-                n = atoi(args[1]);
-                if (n <= 0) {
-                    printf(ROJO "fg: Argumento inválido\n" RESET);
-                    continue; // Argumento inválido, volver al bucle principal
-                }
-            }
-
-            // Bloqueamos SIGCHLD antes de acceder a la lista
-            block_SIGCHLD();
-            // Obtenemos el trabajo por su posición en la lista
-            job * fg_job = get_item_bypos(job_list, n);
-            if (fg_job == NULL) {
+            int idx = (args[1] == NULL) ? 1 : atoi(args[1]);  /*si no hay mas, idx = 1, si hay mas es el valor en entero*/
+            block_SIGCHLD(); /* race conditions */
+            job * tarea_fg = get_item_bypos(job_list, idx);
+            if (tarea_fg == NULL) {
                 printf(ROJO "fg: no existe un trabajo en esa posición\n" RESET);
                 // Desbloqueamos SIGCHLD si no encontramos el trabajo
                 unblock_SIGCHLD();
@@ -145,38 +134,39 @@ int main(void)
             }
 
             // Cambiamos el estado del trabajo a FOREGROUND
-            fg_job->state = FOREGROUND;
-            // Ya no necesitamos acceso exclusivo a la lista
+            printf(PURPURA"Background process pid: %d, command: %s is now running in Foreground\n" RESET, tarea_fg->pgid, tarea_fg->command);
+            if (tarea_fg->state == STOPPED) killpg(tarea_fg->pgid, SIGCONT);
+            tarea_fg->state = FOREGROUND;
             unblock_SIGCHLD();
 
             // Cedemos el terminal al grupo de procesos del trabajo
-            tcsetpgrp(STDIN_FILENO, fg_job->pgid);
-            // Enviamos señal SIGCONT por si el trabajo estaba detenido
-            killpg(fg_job->pgid, SIGCONT);
+            tcsetpgrp(STDIN_FILENO, tarea_fg->pgid);
+
 
             int status;
             int info;
             enum status status_res;
 
             // Esperamos al proceso en primer plano (puede finalizar o suspenderse)
-            pid_t pid_wait = waitpid(fg_job->pgid, &status, WUNTRACED);
+            pid_t pid_wait = waitpid(tarea_fg->pgid, &status, WUNTRACED);
             // Analizamos el estado en que terminó o cambió el proceso
             status_res = analyze_status(status, &info);
 
             switch (status_res) {
                 case SUSPENDED:
                     block_SIGCHLD();
-                    fg_job->state = STOPPED;
+                    tarea_fg->state = STOPPED;
                     unblock_SIGCHLD();
-                    printf(VERDE "Proceso %d suspendido de nuevo.\n" RESET, fg_job->pgid);
+                    printf(CIAN "Foreground pid: %d, command: %s, Suspended in FG, info: %d.\n" RESET, tarea_fg->pgid, tarea_fg->command, info);
                     break;
 
                 case EXITED:
+
                 case SIGNALED:
                     block_SIGCHLD();
-                    printf(VERDE "Foreground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET, 
-                        pid_wait, fg_job->command, status_strings[status_res], info);
-                    delete_job(job_list, fg_job);
+                    printf(CIAN "Foreground pid: %d, command: %s, %s, info: %d\n" RESET, 
+                        pid_wait, tarea_fg->command, status_strings[status_res], info);
+                    delete_job(job_list, tarea_fg);
                     unblock_SIGCHLD();
                     break;
 
@@ -205,8 +195,8 @@ int main(void)
 
             // Bloqueamos SIGCHLD antes de acceder a la lista de trabajos.
             block_SIGCHLD();
-            job *bg_job = get_item_bypos(job_list, n);
-            if (bg_job == NULL) {
+            job *tarea_bg = get_item_bypos(job_list, n);
+            if (tarea_bg == NULL) {
                 // Si no encontramos un trabajo en esa posición, informamos y continuamos.
                 printf(ROJO "bg: no existe un trabajo en esa posición\n" RESET);
                 unblock_SIGCHLD();
@@ -214,7 +204,7 @@ int main(void)
             }
 
             // Verificamos que el trabajo esté suspendido (STOPPED).
-            if (bg_job->state != STOPPED) {
+            if (tarea_bg->state != STOPPED) {
                 // Si no está suspendido, no podemos ponerlo en bg.
                 printf(ROJO "bg: el trabajo seleccionado no está suspendido\n" RESET);
                 unblock_SIGCHLD();
@@ -222,16 +212,16 @@ int main(void)
             }
 
             // Cambiamos el estado a BACKGROUND
-            bg_job->state = BACKGROUND;
+            tarea_bg->state = BACKGROUND;
             // Ya no necesitamos acceso exclusivo a la lista
             unblock_SIGCHLD();
 
             // Enviamos SIGCONT al grupo de procesos del trabajo para reanudarlo en segundo plano.
-            killpg(bg_job->pgid, SIGCONT);
+            killpg(tarea_bg->pgid, SIGCONT);
 
             // Indicamos al usuario que el trabajo se ha reanudado en segundo plano.
             printf(VERDE "Tarea %d reanudada en segundo plano: PID: %d, Command: %s\n" RESET, 
-                   n, bg_job->pgid, bg_job->command);
+                   n, tarea_bg->pgid, tarea_bg->command);
 
             continue; // Volver al inicio del bucle principal
         }
@@ -289,11 +279,12 @@ int main(void)
                             tarea = new_job(pid_fork, args[0], STOPPED);
                             add_job(job_list, tarea);
                             unblock_SIGCHLD();
+                            printf(CIAN "\nForeground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET,
+                                   pid_wait, args[0], status_strings[status_res], info);
                             break;
-
                         case EXITED:
                         case SIGNALED:
-                            printf(VERDE "Foreground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET,
+                            printf(CIAN "Foreground pid: %d, Command: %s, Status: %s, Info: %d\n" RESET,
                                    pid_wait, args[0], status_strings[status_res], info);
                             break;
 
@@ -306,7 +297,7 @@ int main(void)
                     tarea = new_job(pid_fork, args[0], BACKGROUND);
                     add_job(job_list, tarea);
                     unblock_SIGCHLD();
-                    printf(VERDE "Background process running -> PID: %d, Command: %s\n" RESET,
+                    printf(CIAN "Background process running pid: %d, Command: %s\n" RESET,
                            pid_fork, args[0]);
                 }
 
