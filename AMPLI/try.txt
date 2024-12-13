@@ -1,0 +1,82 @@
+[200~job * new_job(pid_t pid, const char * command, int nargs, const char ** args, enum job_state state)
+{
+    job * aux;
+    aux = (job *) malloc(sizeof(job));
+    aux->pgid = pid;
+    aux->state = state;
+    aux->command = strdup(command);
+    aux->next = NULL;
+    //
+    aux->nargs = nargs; //guardamos numero de args
+    aux->args = malloc((nargs + 1 )* sizeof(char*)); //alocamos memoria
+    //
+    if (aux->args != NULL){
+        for(int i = 0; i<=nargs; i++){
+             aux->args[i] = args[i]
+        }
+        aux->args[nargs+1] = NULL;
+    }
+    return aux;
+}
+
+// -----------------------------------------------------------------------
+/* inserta elemento en la cabeza de la lista */
+void add_job (job * list, job * item)
+{
+    job * aux = list->next;
+    list->next = item;
+    item->next = aux;
+    list->pgid++;
+}
+
+// -----------------------------------------------------------------------
+/* elimina el elemento indicado de la lista 
+devuelve 0 si no pudo realizarse con exito */
+int delete_job(job * list, job * item)
+{
+    job * aux = list;
+    while ((aux->next != NULL) && (aux->next != item)) aux = aux->next;
+    if (aux->next == NULL) return 0;
+    aux->next = item->next;
+    free(item->command);
+    //
+    for(int i = 0; i<=nargs; i++){
+        ptr_aux = aux->args[i]
+    }
+        aux->args[nargs+1] = NULL;
+    
+    //
+    free(item)
+
+
+
+
+    list->pgid--;
+    return 1;
+}
+// -----------------------------------------------------------------------
+/* busca y devuelve un elemento de la lista cuyo pid coincida con el indicado,
+devuelve NULL si no lo encuentra */
+job * get_item_bypid(job * list, pid_t pid)
+{
+    job * aux = list;
+    while ((aux->next != NULL) && (aux->next->pgid != pid)) aux = aux->next;
+    return aux->next;
+}
+// -----------------------------------------------------------------------
+job * get_item_bypos( job * list, int n)
+{
+    job * aux = list;
+    if ((n < 1) || (n > list->pgid)) return NULL;
+    n--;
+    while (n && (aux->next != NULL)) { aux = aux->next; n--;}
+    return aux->next;
+}
+
+// -----------------------------------------------------------------------
+/*imprime una linea en el terminal con los datos del elemento: pid, nombre ... */
+void print_item(job * item)
+{
+
+    printf(pid: %d, command: %s, state: %sn, item->pgid, item->command, state_strings[item->state]);
+}~
