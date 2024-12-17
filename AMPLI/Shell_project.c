@@ -1,6 +1,5 @@
 #include <string.h>   
 #include <errno.h>    
-#include <fcntl.h>
 #include "job_control.h" // remember to compile with module job_control.c
 #include "parse_redir.h" 
 
@@ -19,14 +18,15 @@
 
 // Lista de tareas de procesos, para tener informacion de procesos en background
 job *job_list;
-
+int dead_signaled;
+int dead_exited;
 //-----------------------------------------------------------------------------
 //                            Manejador de childs
 //-----------------------------------------------------------------------------
 void child_handler(int s) {
     int status;              
     pid_t pid;               
-    int info;                
+    int info;               
     enum status status_res;  // enum status define valores posibles estados de procesos tras waitpid()
     // Recorremos todos los procesos hijos que han cambiado de estado
     block_SIGCHLD();
@@ -38,8 +38,12 @@ void child_handler(int s) {
         // Usamos la funion getitembypid para rescatar el trabajo y cambiar su estatus o eliminaro
         job *current_job = get_item_bypid(job_list, pid);
 
-        if (current_job) {;
-            printf(PURPURA "Background process %d: %s, info: %d\n" RESET, pid, status_strings[status_res], info);
+        if (current_job) {
+            if (info == 1){ // si el programa termina con error devuelve info = 1.
+                printf(ROJO"Background process %d: %s, info: %d\n" RESET, pid, status_strings[status_res], info);                
+            }else{
+                printf(PURPURA "Background process %d: %s, info: %d\n" RESET, pid, status_strings[status_res], info);
+            }
             fflush(stdout);
             switch (status_res) {
                 case SUSPENDED:
@@ -53,12 +57,36 @@ void child_handler(int s) {
                     break;
 
                 default:
-                /* Si ha terminado, eliminamos la tera de la lista*/
-                    delete_job(job_list, current_job);
+                /* Si ha terminado, y no es respawn eliminamos la tera de la lista*/
+                    if (current_job->state!= RESPAWNED && current_job->state != STOP_RESPAWN || info ==1){ // Si termina con error, para evitar bucles, no revivimos.
+                        delete_job(job_list, current_job);
+                        //Añadimos contador
+                        if (status_res == SIGNALED) dead_signaled++;
+                        else dead_exited++;
+                    }else{//tenemos que revivir los comandos con la flag respawn
+                        pid = fork();
+                        switch(pid){
+                            case -1:
+                            /*error*/
+                            case 0:
+                                new_process_group(getpid());
+                                restore_terminal_signals();
+                                execvp(current_job->args[0], current_job->args); 
+                                perror(ROJO "Error: execvp falló" RESET);
+                                exit(EXIT_FAILURE);
+                                break;
+                            default:
+                                printf(CIAN "Reviving process; old pid: %d, new pid: %d, Command: %s\n" RESET, current_job->pgid, pid, current_job->command);
+                                current_job->state = RESPAWNED; //Cambiamos a RESPAWNED para que pueda volver a revivir en la siguiente finalización
+                                current_job->pgid = pid; //Actualizamos pid del proceso por el nuevo.
+                                break;
+                        }
+
+                    }
+                    //Añadimos contador dead
                     break;
                 
             }
-
         }
     }
     unblock_SIGCHLD();
@@ -78,6 +106,8 @@ int main(void)
     int info;               /* info processed by analyze_status() */
     job *tarea; /* Creamos variable job para manejar tareas creadas.*/
     job_list = new_list("Job List");
+    dead_signaled = 0;
+    dead_exited = 0;
 
 
     signal(SIGCHLD, child_handler);
@@ -113,13 +143,18 @@ int main(void)
 
         /* _______________________    COMANDOS INTERNOS     _______________________*/
 
+        // COmando interno: dead
+        if (strcmp(args[0], "dead") == 0) {
+            printf(ROJO "Dead jobs: Signaled: %d, Exited: %d\n"RESET, dead_signaled, dead_exited);
+            continue;
+        }
         // Comando interno: (cd)
         if (strcmp(args[0], "cd") == 0) {
             if (args[1] == NULL) {
                 chdir(getenv("HOME")); 
             } else {
                 if (chdir(args[1]) == -1) { 
-                    printf(ROJO "Error: Directorio no encontrado\n" RESET);
+                    printf(ROJO "Error: cd: %s:"RESET" %s\n", args[1], strerror(errno));
                 }
             }
             continue; // Volver al inicio del bucle principal
@@ -151,7 +186,7 @@ int main(void)
 
             // Cambiamos el estado del trabajo a FOREGROUND
             printf(PURPURA"Background process pid: %d, command: %s is now running in Foreground\n" RESET, tarea_fg->pgid, tarea_fg->command);
-            if (tarea_fg->state == STOPPED ||tarea_fg->state == STOP_RESPAWN ) killpg(tarea_fg->pgid, SIGCONT);
+            if (tarea_fg->state == STOPPED || tarea_fg->state == STOP_RESPAWN ) killpg(tarea_fg->pgid, SIGCONT);
             tarea_fg->state = FOREGROUND;
             unblock_SIGCHLD();
 
@@ -208,7 +243,7 @@ int main(void)
             }
 
             // Verificamos que el trabajo esté suspendido (STOPPED).
-            if (tarea_bg->state != STOPPED) {
+            if (tarea_bg->state != STOPPED && tarea_bg->state != STOP_RESPAWN) {
                 // Si no está suspendido, no podemos ponerlo en bg.
                 printf(ROJO "bg: el trabajo seleccionado no está suspendido\n" RESET);
                 unblock_SIGCHLD();
@@ -248,24 +283,24 @@ int main(void)
 
                 // Redirección de entrada
                 if (fich_entrada != NULL) {
-                    int fd_in = open(fich_entrada, O_RDONLY);
-                    if (fd_in < 0) {
+                    FILE * fd_in = fopen(fich_entrada, "r");
+                    if (fd_in == NULL) {
                         perror(ROJO "Error abriendo fichero de entrada" RESET);
                         exit(1);
                     }
-                    dup2(fd_in, STDIN_FILENO);
-                    close(fd_in);
+                    dup2(fileno(fd_in), STDIN_FILENO);
+                    fclose(fd_in);
                 }
 
                 // Redirección de salida
                 if (fich_salida != NULL) {
-                    int fd_out = open(fich_salida, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                    if (fd_out < 0) {
+                    FILE* fd_out = fopen(fich_salida, "w");
+                    if (fd_out == NULL) {
                         perror(ROJO "Error abriendo fichero de salida" RESET);
                         exit(1);
                     }
-                    dup2(fd_out, STDOUT_FILENO);
-                    close(fd_out);
+                    dup2(fileno(fd_out), STDOUT_FILENO);
+                    fclose(fd_out);
                 }
 
                 execvp(args[0], args);

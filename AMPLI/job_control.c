@@ -35,7 +35,7 @@ void get_command(char *inputBuffer, int size, char *args[], int *background)
 
     start = -1;
     if (length == 0) {
-        printf("\nBye\n");
+        printf("\x1b[31;1;1m""\nBye\n""\x1b[0m");
         exit(0);            /* ^d was entered, end of user command stream */
     } 
     if (length < 0) {
@@ -164,12 +164,12 @@ void print_item(job * item)
 {
 
     printf("pid: %d, command: %s, state: %s\n", item->pgid, item->command, state_strings[item->state]);
-    //
-    printf("INSTRUCCION: ");
-    for (int i = 0; i< item->nargs; i++){
-        printf("%s ", item->args[i]);
-    }
-    puts("");
+    //Descomentar para mas info (pero baja nota en teoria)
+    //printf("INSTRUCCION: ");
+    //for (int i = 0; i< item->nargs; i++){
+    //    printf("%s ", item->args[i]);
+    //}
+    //puts("");
 }
 
 // -----------------------------------------------------------------------
