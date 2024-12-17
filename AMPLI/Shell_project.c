@@ -2,6 +2,7 @@
 #include <errno.h>    
 #include "job_control.h" // remember to compile with module job_control.c
 #include "parse_redir.h" 
+#include <pthread.h>
 
 // Añadimos colores para tarea adicional
 #define RESET "\x1b[0m"
@@ -20,6 +21,26 @@
 job *job_list;
 int dead_signaled;
 int dead_exited;
+pthread_t alarm_thread;
+//-----------------------------------------------------------------------------
+//                            Funcion alarm-thread
+//-----------------------------------------------------------------------------
+typedef struct datos_alarma{
+    int delay;
+    pid_t pid_alarma;
+}data_alarm;
+
+void *alarm_timer(void *datos){
+    data_alarm * data = (data_alarm *)datos;
+    sleep(data->delay);
+    kill(data->pid_alarma, SIGKILL);
+    printf(ROJO"Killing pid:%d after waiting for %d\n"RESET, data->pid_alarma, data->delay);
+    
+}
+
+
+
+
 //-----------------------------------------------------------------------------
 //                            Manejador de childs
 //-----------------------------------------------------------------------------
@@ -97,6 +118,8 @@ int main(void)
     char inputBuffer[MAX_LINE]; /* Bbuffer to hold the command entered*/
     int background;             /* equals 1 if a command is followed by '&' */
     int respawn;                /* comprobamos si tiene el argumento '+' */
+    int alarmar;                /* variable para informar si debemos alarmar*/
+    data_alarm *alarma = malloc(sizeof(data_alarm));
     char *args[MAX_LINE / 2];   /* command line (of 256) has max of 128 arguments */
 
     // probably useful variables
@@ -119,6 +142,7 @@ int main(void)
 
     while (1) {  /* Bucle principal del shell */
         respawn = 0;
+        alarmar  = 0;
         printf(VERDE "COMMAND->" RESET);
         fflush(stdout); 
         get_command(inputBuffer, MAX_LINE, args, &background); /*get next command*/
@@ -147,6 +171,22 @@ int main(void)
         if (strcmp(args[0], "dead") == 0) {
             printf(ROJO "Dead jobs: Signaled: %d, Exited: %d\n"RESET, dead_signaled, dead_exited);
             continue;
+        }
+
+        //Comando interno: alarm-thread
+        if (strcmp(args[0], "alarm-thread") == 0) {
+            int delay = atoi(args[1]);
+            if (delay < 0){
+                printf(ROJO "Valor erróneo de temporizador\n"RESET);
+                continue;
+            }
+            alarma->delay = delay; 
+            for (int i = 2; args[i - 2]!=NULL;i++){
+                args[i-2]=args[i];
+            }
+            nargs -= 2;
+            alarmar = 1;
+
         }
         // Comando interno: (cd)
         if (strcmp(args[0], "cd") == 0) {
@@ -183,21 +223,16 @@ int main(void)
                 unblock_SIGCHLD();
                 continue; // Volver al bucle principal
             }
-
             // Cambiamos el estado del trabajo a FOREGROUND
             printf(PURPURA"Background process pid: %d, command: %s is now running in Foreground\n" RESET, tarea_fg->pgid, tarea_fg->command);
             if (tarea_fg->state == STOPPED || tarea_fg->state == STOP_RESPAWN ) killpg(tarea_fg->pgid, SIGCONT);
             tarea_fg->state = FOREGROUND;
             unblock_SIGCHLD();
-
             // Cedemos el terminal al proceso
             tcsetpgrp(STDIN_FILENO, tarea_fg->pgid);
-
-
             int status;
             int info;
             enum status status_res;
-
             // Esperamos al proceso en fg
             pid_t pid_wait = waitpid(tarea_fg->pgid, &status, WUNTRACED);
             // Analizamos el estado en que terminó o cambió el proceso
@@ -277,10 +312,10 @@ int main(void)
             case 0: /* Proceso hijo */
                 restore_terminal_signals();
                 new_process_group(getpid());
+
                 if (background == 0 && respawn == 0){
                     tcsetpgrp(STDIN_FILENO, getpid());
                 }
-
                 // Redirección de entrada
                 if (fich_entrada != NULL) {
                     FILE * fd_in = fopen(fich_entrada, "r");
@@ -308,7 +343,15 @@ int main(void)
                 exit(EXIT_FAILURE);
 
             default: /* Proceso padre */
-                if (background == 0 && respawn == 0) {
+
+                if (alarmar){
+                    //creamos el thread que va a "dormir"
+                    alarma->pid_alarma = pid_fork; /*añadimos el valor del fork del hijo a los datos de la alarma*/
+                    printf(PURPURA "Empezando un temporizador de %d segundos para %s\n"RESET, alarma->delay, args[0]);
+                    pthread_create(&alarm_thread, NULL, &alarm_timer, alarma);
+                    pthread_detach(alarm_thread);
+                }
+                if (background == 0 && respawn == 0) { /*Comprobamos que el proceso se ejecuta en*/
                     tcsetpgrp(STDIN_FILENO, pid_fork);
                     pid_wait = waitpid(pid_fork, &status, WUNTRACED);
                     tcsetpgrp(STDIN_FILENO, getpid());
