@@ -132,10 +132,6 @@ int delete_job(job * list, job * item)
     free(item->args);
         //
     free(item);
-
-
-
-
     list->pgid--;
     return 1;
 }
