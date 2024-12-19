@@ -167,6 +167,10 @@ int main(void)
         alarmar  = 0;
         esperar = 0;
         int contador = 1;
+        int mask_sig = 0; 
+        int n_signal = 0;
+        int separador = 0;
+        int signal_list[MAX_LINE];
         /*                                */
         printf(BLANCO "COMMAND->" RESET);
         fflush(stdout); 
@@ -269,6 +273,44 @@ int main(void)
             esperar = 1;
             background = 1;
         }
+
+        //Comando interno : mask
+        if (strcmp(args[0], "mask")==0){
+            if (args[1]==NULL){ //solo se pone mask
+                printf(ROJO"No se ha introducido señal a enmascarar\n"RESET);
+                continue;
+            }
+            separador = 0;
+            for (int i = 0; args[i]; i++){ //recorremos hasta NULL
+                if (!strcmp(args[i], "-c")){ // si hay -c ponemos su indice en el valor de separador
+                    separador = i;
+                    break;
+                }
+            }
+            if (separador == 0){ //si no ha habido separador cerramos
+                printf(ROJO"No se ha encontrado el separador -c\n" RESET);
+                continue;
+            }
+            int ok = 0;
+            for (int i = 1; i<separador; i++){
+                ok = 1;
+                if (atoi(args[i]) <= 0){
+                    ok = 0;
+                    break;
+                }
+                signal_list[i-1] = atoi(args[i]);
+            }
+            //hemos añadido todos los numeros a la lista
+            if (ok == 0){
+                printf(ROJO"Error en los numeros de señales a enmascarar\n"RESET);
+                continue;
+            }
+            for (int i = separador + 1; i <= nargs; i++) { // Ajustamos los índices
+                args[i - (separador + 1)] = args[i];
+            }
+            nargs -= separador +1;
+            mask_sig = 1;
+         }
         // Comando interno: (cd)
         if (strcmp(args[0], "cd") == 0) {
             if (args[1] == NULL) {
@@ -394,6 +436,12 @@ int main(void)
 
                 case 0: /* Proceso hijo */
                     restore_terminal_signals();
+                    if (mask_sig){
+                        for (int i = 0; i< separador; i++){
+                            mask_signal(signal_list[i], SIG_BLOCK);
+                        }
+                    }
+                    printf("%s ", args[0]);
                     new_process_group(getpid());
                     //Comprobamos si tenemos que esperar, para hacernos killpg SIGSTOP a nosotros mismosç
                     block_SIGCHLD();
