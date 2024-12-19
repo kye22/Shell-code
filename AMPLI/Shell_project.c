@@ -7,6 +7,7 @@
 #include "job_control.h" // remember to compile with module job_control.c
 #include "parse_redir.h" 
 #include <pthread.h>
+#include <time.h>
 
 // Añadimos colores para tarea adicional
 #define RESET "\x1b[0m"
@@ -150,8 +151,8 @@ int main(void)
     int status;             /* status returned by wait */
     enum status status_res; /* status procesed by analyze_status() */
     int info;               /* info processed by analyze_status() */
-
-
+    struct timespec start, end;
+    int signal_list[MAX_LINE];
 
     signal(SIGCHLD, child_handler);
     signal(SIGHUP, sighup_handler);
@@ -170,7 +171,8 @@ int main(void)
         int mask_sig = 0; 
         int n_signal = 0;
         int separador = 0;
-        int signal_list[MAX_LINE];
+        int etime = 0;
+
         /*                                */
         printf(BLANCO "COMMAND->" RESET);
         fflush(stdout); 
@@ -273,7 +275,26 @@ int main(void)
             esperar = 1;
             background = 1;
         }
+        //Comando interno: etime:
+        if (strcmp(args[0], "etime")==0){
+            etime = 1;
+            /*forzamos que no sea background*/
+            background = 0;
+            if (clock_gettime(CLOCK_MONOTONIC, &start) == -1){
+                printf(ROJO"Error al obtener tiempo\n" RESET);
+                continue;
+            }
+            if (args[1]==NULL){
+                printf(ROJO"No se ha especificado ningún comando que medir \n"RESET);
+                continue;
+            }
+            //eliminamos etime del comando
+            for (int i = 1; args[i-1]; i++){
+                args[i-1]=args[i];
+            }
 
+
+        }
         //Comando interno : mask
         if (strcmp(args[0], "mask")==0){
             if (args[1]==NULL){ //solo se pone mask
@@ -491,6 +512,20 @@ int main(void)
                         pid_wait = waitpid(pid_fork, &status, WUNTRACED);
                         tcsetpgrp(STDIN_FILENO, getpid());
 
+                        /*Calculamos diferencia de tiempos*/
+                        if (etime){
+                            if (clock_gettime(CLOCK_MONOTONIC, &end) == -1){
+                                printf(ROJO"Error al obtener tiempo\n" RESET);
+                                continue;
+                            }
+                            int segundos = end.tv_sec - start.tv_sec;
+                            int nanosegundos = end.tv_nsec - start.tv_nsec;
+                            if (nanosegundos < 0){
+                                segundos -= 1;
+                                nanosegundos += 1000000000;
+                            }
+                            printf(VERDE"Tiempo de ejecucion de %s: %ld.%03ld segundos\n"RESET, args[0], segundos, nanosegundos/1000000);
+                        }
                         status_res = analyze_status(status, &info);
 
                         switch (status_res) {

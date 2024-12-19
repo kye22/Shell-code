@@ -1,0 +1,62 @@
+Modificaciones realizadas en el Shell básico. Hecho por Cayetano López Moreno
+
+
+Añadimos las modificaciones de entrenamiento proporcionadas por el profesor:
+
+Modificación SIGHUP:
+
+Añadimos un manejador para la señal SIGHUP mediante el uso de la función signal, a la que le indicamos la señal que queremos enmascarar y lo enviamos a una función.
+En esa función implementamos la pista que nos otorga el profesor, añadiendo solo un fclose(fd).
+
+Comando currjob:
+
+Añadimos un comando interno "currjob" el cual mostrará por pantalla el valor del PID y el comando que se encuentran últimos en la lista de tareas.
+Para hacerlo simplemente obtenemos el primer trabajo de la lista y mostramos su información
+
+Comando bgteam:
+
+Añadimos un comando interno bgteam el cual lanzará un número de veces indicada el mismo comando introducido en modo background.
+Para poder implementar esto primero leemos el número de trabajos que queremos lanzar, para realizar un bucle que inicie antes del fork en el que se ejecutan y gestionan los comandos.
+Además de ese bucle, que relanza el mismo comando todo el rato, hemos puesto el valor de la variable background en 1, para que dichos procesos se inicien en segundo plano.
+Para poder ejecutar los comandos hemos eliminado de la cadena de argumentos los dos primeros argumentos, para quedarnos con el comando que queremos ejecutar.
+
+Comando ETIME:
+Añadimos un nuevo comando interno que mostrará el tiempo que ha tardado un proceso desde que se procesa su entrada hasta que termina su ejecución, recogida por el proceso padre, solo para procesos que se ejecutan en foreground.
+
+Para implementarlo incluimos la librería time.h, y utilizamos la función clock_gettime, con la flag CLOCK_MONOTONIC para que no le afecte el posible cambio de hora. Entonces almacenamos el tiempo cuando se detecta que se ha especificado etime en el comando, se elimina "etime" de la cadena de argumentos para dejar el comando en claro y se pone el valor de una variable de control etime en 1, para su posterior tratamiento.
+
+Posteriormente en el proceso padre volvemos a calcular el tiempo actual, y hacemos una resta de los tiempos. Tras esa resta, imprimimos el tiempo resultante por pantalla con un formato adecuado.
+
+Modificación Respawneable:
+
+Añadimos un nuevo estado a los trabajos denominado respawneable, que se activa cuando el comando termina con un "+". Este estado causa que se relance una y otra vez la misma tarea cuando termina o cuando recibe una señal. 
+Para poder guardar el estado y que siga respawneando el proceso incluso después de haber estado suspendido, añadimos otro estado "STOP_RESPAWN", para indicar al manejador de hijos que, si llega un proceso en ese estado y se quiere continuar que el nuevo estado sea RESPAWN, para no perder esa información. Lo mismo pero al revés ocurre cuando llega un proceso de estado RESPAWN y se pretende parar, que se cambia su estado a STOP_RESPAWN.
+
+Para esto leemos primero el número de argumentos, y comprobamos si el último argumento es un símbolo "+". Si es así trataremos su ejecución inicial como si estuviese en background, pero poniendo su estado inicial en RESPAWN.
+Y para poder relanzar el comando cuando muera, hemos tenido que modificar el tipo job, para que almacene también tanto el número de argumentos como la secuencia entera de los mismos. Para ello hemos utilizado memoria dinámica en el almacenamiento de la cadena, por ese motivo hemos necesitado almacenar el número de argumentos.
+Por ultimo, cuando el manejador de hijos recibe la señal de que un proceso con estado RESPAWN o STOP_RESPAWN ha terminado su ejecución, se realiza un fork en dicho manejador que relanza el comando de la tarea que acaba de finalizar, y se modifica su estado a respawned, además del almacenar el nuevo PID. No se espera a dicho hijo mediante un waitpid puesto que será lanzado en segundo plano.
+
+Comando interno alarm-thread:
+
+Añadimos un nuevo comando interno alarm-thread cuya función es limitar un tiempo de vida de un trabajo, utilizando threads.
+Para ejecutar este comando, cuando se introduce "alarm-thread" como primer argumento se comprueba que el segundo argumento es un número positivo. Si es así se pone en 1 una variable booleana para lanzar el hilo en el proceso padre.
+Además eliminamos los dos primeros argumentos del comando, y almacenamos los segundos y la acción que queremos realizar pasado ese tiempo, en este caso, SIGKILL.
+En el proceso padre, si se ha introducido el comando alarm-thread correctamente, se creará un thread que va a una función en la cual hace el comando sleep el numero de segundos indicados, y posteriormente hace un killpg al pid indicado, con la señal indicada, en este caso SIGKILL. Como argumento de la función pasamos un puntero a un struct, el cual tiene el tiempo que debe dormir, el PID del proceso del que queremos limitar su tiempo de vida, y la acción a realizar.
+El hilo además lo lanzamos en modo detached para que maneje los recursos por su cuenta.
+
+Comanto interno delay-thread:
+
+Este comando interno lo que realiza es postergar la ejecución de un comando que queremos lanzar un número de segundos indicado. 
+Nos apoyamos en lo ya creado para poder realizar el comando alarm-thread, pero con algunas diferencias. Cuando nos llega un comando que inicia con delay-thread realizamos las mismas comprobaciones iniciales, pero ponemos en 1 una booleana que sea esperar, y además ponemos que los procesos a ejecutar sean siempre en modo background. En este caso, la acción que ponemos es SIGCONT. Cuando llegamos al proceso hijo en el fork, encargado de lanzar los comandos, comprobamos si tenemos activada la variable booleana para postergar la ejecución. Si es así el proceso se para a sí mismo utilizando killpg con SIGSTOP. Posteriormente, cuando termina de esperar el hilo, le mandará una señal para que continúe el proceso que se ha detenido. Para esto utilizamos la misma función que empleamos para el comando alarm-thread
+
+Comando interno mask:
+
+Este comando enmascara un número de señales indicadas en al ejecución del comando también indicado, que viene separado por "-c" de las señales.
+Para implementar este comando comprobamos si el primer argumento es "mask". Si es así se comprueba que el comando tenga una sintaxis correcta, es decir, que no hay ningún numero de señal negativa, y que se encuentra un separador.
+Una vez se realizan las comprobaciones, guardamos en una lista los números de señales que queremos enmascarar, y eliminamos de la lista args todos los elementos hasta justo después del separador.
+Esta nueva cadena será la que se ejecute en el hijo, pero antes enmascaramos todas las señales leídas de teclado, para que sea el hijo el que tenga esas señales enmascaradas. Para enmascararlas utilizamos el comando mask_signal, proporcionado por el job_control.c
+
+Modificación de colores:
+
+Añadimos unos valores para emplear a la hora de mostrar en pantalla utilizando printf. 
+
